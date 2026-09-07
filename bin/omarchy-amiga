@@ -1,0 +1,384 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/amiga"
+PID_FILE="$STATE_DIR/fs-uae.pid"
+CHILD_PID_FILE="$STATE_DIR/fs-uae-child.pid"
+IMAGE_FILE="$STATE_DIR/fs-uae-image"
+MODE_FILE="$STATE_DIR/fs-uae-mode"
+LOOP_FILE="$STATE_DIR/loop"
+MUTE_FILE="$STATE_DIR/mute"
+LOG_FILE="$STATE_DIR/fs-uae.log"
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SHIM_DIR="$(dirname "${BASH_SOURCE[0]}")"
+case "$(uname -m)" in
+  x86_64|amd64)
+    [[ -r "$PLUGIN_DIR/bin/amiberry/x86_64/liblayer-shell-preload.so" ]] &&
+      LAYER_PRELOAD="$PLUGIN_DIR/bin/amiberry/x86_64/liblayer-shell-preload.so" ||
+      LAYER_PRELOAD=/usr/lib/liblayer-shell-preload.so
+    SDL_SHIM="$PLUGIN_DIR/bin/amiberry/x86_64/libomarchy-amiga-sdlshim.so"
+    ;;
+  *)
+    LAYER_PRELOAD="$SHIM_DIR/libomarchy-amiga-layer-shell-preload.so"
+    SDL_SHIM="$SHIM_DIR/libomarchy-amiga-sdlshim.so"
+    ;;
+esac
+
+bundled_amiberry() {
+  local arch
+  case "$(uname -m)" in
+    aarch64|arm64) arch=aarch64 ;;
+    x86_64|amd64) arch=x86_64 ;;
+    *) return 1 ;;
+  esac
+  [[ -x "$PLUGIN_DIR/bin/amiberry/$arch/amiberry" ]] || return 1
+  printf '%s\n' "$PLUGIN_DIR/bin/amiberry/$arch/amiberry"
+}
+
+mkdir -p "$STATE_DIR"
+
+usage() {
+  printf 'Usage: %s {start|stop|status} [file.dms|file.adf] [direct|background]\n' "$0" >&2
+}
+
+read_pid() {
+  [[ -s "$PID_FILE" ]] || return 1
+  local pid
+  read -r pid < "$PID_FILE"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$pid"
+}
+
+running_pid() {
+  local pid child
+  pid="$(read_pid 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || return 1
+  if [[ "$(ps -o comm= -p "$pid" 2>/dev/null || true)" == "fs-uae" ||
+        "$(ps -o comm= -p "$pid" 2>/dev/null || true)" == "amiberry" ]]; then
+    printf '%s\n' "$pid"
+    return 0
+  fi
+  child="$(cat "$CHILD_PID_FILE" 2>/dev/null || true)"
+  [[ "$child" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$child" 2>/dev/null || return 1
+  [[ "$(ps -o comm= -p "$child" 2>/dev/null || true)" == "fs-uae" ||
+     "$(ps -o comm= -p "$child" 2>/dev/null || true)" == "amiberry" ]] || return 1
+  printf '%s\n' "$pid"
+}
+
+stop_demo() {
+  local pid child image candidate cmdline remaining
+  pid="$(running_pid 2>/dev/null || true)"
+  child="$(cat "$CHILD_PID_FILE" 2>/dev/null || true)"
+  image="$(cat "$IMAGE_FILE" 2>/dev/null || true)"
+  if [[ "$child" =~ ^[0-9]+$ ]]; then kill -TERM "$child" 2>/dev/null || true; fi
+  if [[ -n "$pid" ]]; then
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in {1..30}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+  fi
+  # Clean up orphaned children from older launcher versions, but only when
+  # their floppy matches the disk managed by this plugin.
+  if [[ -n "$image" ]]; then
+    while read -r candidate; do
+      [[ "$candidate" =~ ^[0-9]+$ ]] || continue
+      cmdline="$(tr '\0' ' ' < "/proc/$candidate/cmdline" 2>/dev/null || true)"
+      [[ "$cmdline" == *"--floppy-drive-0=$image"* || "$cmdline" == *"$image"* ]] || continue
+      kill -TERM "$candidate" 2>/dev/null || true
+    done < <({ pgrep -x fs-uae; pgrep -x amiberry; } 2>/dev/null || true)
+    for _ in {1..30}; do
+      remaining=0
+      while read -r candidate; do
+        [[ "$candidate" =~ ^[0-9]+$ ]] || continue
+        cmdline="$(tr '\0' ' ' < "/proc/$candidate/cmdline" 2>/dev/null || true)"
+        [[ "$cmdline" == *"--floppy-drive-0=$image"* || "$cmdline" == *"$image"* ]] || continue
+        remaining=1
+        break
+      done < <({ pgrep -x fs-uae; pgrep -x amiberry; } 2>/dev/null || true)
+      (( remaining == 0 )) && break
+      sleep 0.1
+    done
+    while read -r candidate; do
+      [[ "$candidate" =~ ^[0-9]+$ ]] || continue
+      cmdline="$(tr '\0' ' ' < "/proc/$candidate/cmdline" 2>/dev/null || true)"
+      [[ "$cmdline" == *"--floppy-drive-0=$image"* || "$cmdline" == *"$image"* ]] || continue
+      kill -KILL "$candidate" 2>/dev/null || true
+    done < <({ pgrep -x fs-uae; pgrep -x amiberry; } 2>/dev/null || true)
+  fi
+  rm -f "$PID_FILE"
+  rm -f "$CHILD_PID_FILE"
+  rm -f "$IMAGE_FILE"
+}
+
+loop_enabled() { [[ "$(cat "$LOOP_FILE" 2>/dev/null || printf 'on')" == "on" ]]; }
+
+mute_enabled() { [[ "$(cat "$MUTE_FILE" 2>/dev/null || printf 'off')" == "on" ]]; }
+
+stop_audio_background() {
+  local write_state="$HOME/.config/omarchy/plugins/io.github.avillagran.omarchy-audio-background/bin/write_state.sh"
+  [[ -x "$write_state" ]] && "$write_state" running=0 >/dev/null 2>&1 || true
+  local audio_binary="$HOME/.config/omarchy/plugins/io.github.avillagran.omarchy-audio-background/bin/ttfx-bg-rs-aarch64"
+  case "$(uname -m)" in
+    x86_64|amd64) audio_binary="${audio_binary%-aarch64}-x86_64" ;;
+  esac
+  python3 - "$audio_binary" <<'PY'
+import os
+import signal
+import sys
+
+target = sys.argv[1].encode()
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    try:
+        cmdline = open(f"/proc/{name}/cmdline", "rb").read()
+    except OSError:
+        continue
+    if cmdline.startswith(target):
+        try:
+            os.kill(int(name), signal.SIGTERM)
+        except OSError:
+            pass
+PY
+}
+
+apply_mute() {
+  command -v pactl >/dev/null || return 0
+  local mute=0 id
+  mute_enabled && mute=1
+  while read -r id; do
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
+    pactl set-sink-input-mute "$id" "$mute" >/dev/null 2>&1 || true
+  done < <(pactl list sink-inputs 2>/dev/null | awk '
+    /^Sink Input #[0-9]+/ { id=$3; sub(/^#/, "", id) }
+    /application.name = "FS-UAE"/ || /node.name = "fs-uae"/ ||
+    /application.name = "Amiberry"/ || /node.name = "amiberry"/ { print id }
+  ')
+}
+
+toggle_loop() {
+  if loop_enabled; then
+    printf 'off\n' > "$LOOP_FILE"
+  else
+    printf 'on\n' > "$LOOP_FILE"
+    local image mode
+    image="$(cat "$IMAGE_FILE" 2>/dev/null || true)"
+    mode="$(cat "$MODE_FILE" 2>/dev/null || printf 'background')"
+    if [[ -f "$image" ]] && ! running_pid >/dev/null 2>&1; then
+      "$0" start "$image" "$mode" >/dev/null 2>&1 &
+    fi
+  fi
+  printf 'loop=%s\n' "$(cat "$LOOP_FILE")"
+}
+
+toggle_mute() {
+  if mute_enabled; then printf 'off\n' > "$MUTE_FILE"; else printf 'on\n' > "$MUTE_FILE"; fi
+  apply_mute
+  printf 'mute=%s\n' "$(cat "$MUTE_FILE")"
+}
+
+monitor_size() {
+  command -v hyprctl >/dev/null || return 1
+  local signature
+  signature="$(hyprctl instances 2>/dev/null | python3 -c '
+import sys
+for line in sys.stdin:
+    if line.startswith("instance ") and line.rstrip().endswith(":"):
+        print(line.split()[1].rstrip(":"))
+        break
+' 2>/dev/null || true)"
+  [[ -n "$signature" ]] || return 1
+  HYPRLAND_INSTANCE_SIGNATURE="$signature" hyprctl monitors -j 2>/dev/null |
+    python3 -c '
+import json, sys
+try:
+    monitor = json.load(sys.stdin)[0]
+    print("%d %d %d %d" % (monitor["width"], monitor["height"], monitor["x"], monitor["y"]))
+except (ValueError, IndexError, KeyError, TypeError, json.JSONDecodeError):
+    raise SystemExit(1)
+'
+}
+
+start_demo() {
+  local image="${1:-}" mode="${2:-direct}"
+  local demo_dir cpu_model chip_memory fast_memory hardware_file key value
+  [[ -n "$image" ]] || { usage; exit 2; }
+  [[ -f "$image" ]] || { printf 'Amiga disk not found: %s\n' "$image" >&2; exit 1; }
+  case "${image##*.}" in
+    dms|DMS|adf|ADF) ;;
+    *) printf 'Unsupported Amiga disk format: %s (expected .dms or .adf)\n' "$image" >&2; exit 2 ;;
+  esac
+  local emulator bundled_root
+  emulator="$(bundled_amiberry 2>/dev/null || command -v amiberry 2>/dev/null || command -v fs-uae 2>/dev/null || true)"
+  [[ -n "$emulator" ]] || { printf 'amiberry or fs-uae is required but neither was found\n' >&2; exit 127; }
+  bundled_root=""
+  if [[ "$emulator" == "$PLUGIN_DIR/bin/amiberry/"* ]]; then
+    bundled_root="$(dirname "$emulator")"
+    export LD_LIBRARY_PATH="$bundled_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+  [[ "$mode" == direct || "$mode" == background ]] || { printf 'Mode must be direct or background\n' >&2; exit 2; }
+
+  image="$(realpath "$image")"
+  demo_dir="$(dirname "$image")"
+  stop_audio_background
+  stop_demo
+  [[ -e "$LOOP_FILE" ]] || printf 'on\n' > "$LOOP_FILE"
+  [[ -e "$MUTE_FILE" ]] || printf 'off\n' > "$MUTE_FILE"
+  printf '%s\n' "$image" > "$IMAGE_FILE"
+  printf '%s\n' "$mode" > "$MODE_FILE"
+  # Use compatible defaults, with optional per-demo overrides. FS-UAE's
+  # fast-memory option is specified in MiB, so 512 would incorrectly request
+  # 512 MiB. A demo folder may provide hardware.conf with simple
+  # cpu_model=68000|68020, chip_memory=<KiB>, and fast_memory=<MiB> values.
+  cpu_model=68020
+  chip_memory=512
+  fast_memory=1
+  hardware_file="$demo_dir/hardware.conf"
+  if [[ -r "$hardware_file" ]]; then
+    while IFS='=' read -r key value; do
+      key="${key//[[:space:]]/}"
+      value="${value%%#*}"
+      value="${value//[[:space:]]/}"
+      case "$key" in
+        cpu_model) [[ "$value" == 68000 || "$value" == 68020 ]] && cpu_model="$value" ;;
+        chip_memory) [[ "$value" =~ ^[0-9]+$ ]] && chip_memory="$value" ;;
+        fast_memory) [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] && fast_memory="$value" ;;
+      esac
+    done < "$hardware_file"
+  fi
+  local -a args
+  if [[ "$(basename "$emulator")" == "amiberry" ]]; then
+    # Amiberry's -C/-c/-F shorthands abort this build. Use the stable
+    # key=value overrides: chipmem_size is in 512 KiB units and fastmem_size
+    # is in MiB. -G selects the no-GUI emulation path.
+    local amiberry_chip amiberry_fast
+    amiberry_chip=$(( (chip_memory + 511) / 512 ))
+    amiberry_fast=$(awk "BEGIN { print int(($fast_memory + 0.999999)) }")
+    args=("$emulator" -G -s use_gui=no -s "cpu_type=$cpu_model"
+          -s "chipmem_size=$amiberry_chip"
+          -s "fastmem_size=$amiberry_fast")
+    [[ -n "$bundled_root" ]] && args+=( -s "data_dir=$bundled_root/share/amiberry" )
+    args+=( -0 "$image" )
+  else
+    args=(fs-uae
+          "--cpu-model=$cpu_model"
+          "--chip-memory=$chip_memory"
+          "--fast-memory=$fast_memory"
+          "--floppy-drive-0=$image")
+  fi
+  if [[ "$mode" == direct ]]; then
+    [[ "$(basename "$emulator")" == "fs-uae" ]] &&
+      args+=( '--fullscreen=1' '--keep-aspect=1' )
+  else
+    # A wallpaper emulator must never grab the host pointer/keyboard when its
+    # window receives focus. These are FS-UAE's input-grab settings; direct
+    # mode intentionally keeps normal emulator input behavior.
+    if [[ "$(basename "$emulator")" == "amiberry" ]]; then
+      args+=( -s fullscreen=0 -s borderless=1 -s keep_aspect=0
+              -s automatic_input_grab=0 -s initial_input_grab=0
+              -s keyboard_input_grab=0 )
+    else
+      args+=( '--fullscreen=0' '--borderless=1' '--keep-aspect=0'
+              '--automatic-input-grab=0'
+              '--initial-input-grab=0'
+              '--keyboard-input-grab=0' )
+    fi
+    if size="$(monitor_size 2>/dev/null || true)" && [[ "$size" =~ ^-?[0-9]+[[:space:]]-?[0-9]+[[:space:]]-?[0-9]+[[:space:]]-?[0-9]+$ ]]; then
+      read -r width height x y <<< "$size"
+      if [[ "$(basename "$emulator")" == "amiberry" ]]; then
+        args+=( -s "window_width=$width" -s "window_height=$height"
+                -s "window_x=$x" -s "window_y=$y" )
+      else
+        args+=( "--window-width=$width" "--window-height=$height" "--window-x=$x" "--window-y=$y" )
+      fi
+    fi
+  fi
+
+  printf 'Starting %s (%s): %s\n' "$(basename "$emulator")" "$mode" "$image"
+  if [[ "$mode" == background && (! -r "$LAYER_PRELOAD" || ! -r "$SDL_SHIM") ]]; then
+    printf 'gtk4-layer-shell preload library not found: %s\n' "$LAYER_PRELOAD" >&2
+    exit 1
+  fi
+  launch_one() {
+    if [[ "$mode" == background ]]; then
+      SDL_VIDEODRIVER=wayland \
+      LD_PRELOAD="$SDL_SHIM:$LAYER_PRELOAD" \
+      LAYER_LAYER=bottom \
+      LAYER_ANCHOR=lrtb \
+      LAYER_KEYBOARD=none \
+      LAYER_NAMESPACE=omarchy-amiga \
+      LAYER_ALL_SURFACES=1 \
+      SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0 \
+      SDL_VIDEO_WAYLAND_PREFER_LIBDECOR=0 \
+        "${args[@]}" >>"$LOG_FILE" 2>&1 &
+    else
+      "${args[@]}" >>"$LOG_FILE" 2>&1 &
+    fi
+    LAUNCHED_PID=$!
+  }
+  run_emulator() {
+    while :; do
+      local child
+      launch_one
+      child="$LAUNCHED_PID"
+      printf '%s\n' "$child" > "$CHILD_PID_FILE"
+      sleep 0.5
+      apply_mute
+      local exit_status=0
+      wait "$child" || exit_status=$?
+      rm -f "$CHILD_PID_FILE"
+      if (( exit_status != 0 )); then
+        printf 'Amiberry stopped after failure (status=%s); not restarting\n' "$exit_status" >>"$LOG_FILE"
+        break
+      fi
+      loop_enabled || break
+      sleep 1
+    done
+  }
+
+  if loop_enabled; then
+    run_emulator &
+  else
+    launch_one >/dev/null
+  fi
+  local pid=$!
+  printf '%s\n' "$pid" > "$PID_FILE"
+
+  if loop_enabled; then
+    # The supervisor owns the loop; its child owns the actual FS-UAE surface.
+    :
+  fi
+
+  if [[ "$mode" == background ]]; then
+    for _ in {1..40}; do
+      kill -0 "$pid" 2>/dev/null || break
+      if command -v wmctrl >/dev/null && wmctrl -l 2>/dev/null | grep -qi 'fs-uae'; then
+        wmctrl -r 'FS-UAE' -b add,below 2>/dev/null || true
+        wmctrl -r 'FS-UAE' -b add,skip_taskbar,skip_pager 2>/dev/null || true
+        break
+      fi
+      sleep 0.25
+    done
+  fi
+  printf '%s started with PID %s\n' "$(basename "$emulator")" "$pid"
+}
+
+case "${1:-}" in
+  start) start_demo "${2:-}" "${3:-direct}" ;;
+  stop) stop_demo; printf 'FS-UAE stopped\n' ;;
+  status)
+    pid="$(running_pid 2>/dev/null || true)"
+    if [[ -n "$pid" ]]; then
+      printf 'running pid=%s loop=%s mute=%s\n' "$pid" "$(cat "$LOOP_FILE" 2>/dev/null || printf on)" "$(cat "$MUTE_FILE" 2>/dev/null || printf off)"
+    else
+      printf 'stopped\n'
+      exit 1
+    fi
+    ;;
+  toggle-loop) toggle_loop ;;
+  toggle-mute) toggle_mute ;;
+  *) usage; exit 2 ;;
+esac

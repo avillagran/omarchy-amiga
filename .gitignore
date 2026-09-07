@@ -1,0 +1,5 @@
+# User-supplied Amiga media stays outside Git.
+*.adf
+*.dms
+*.rom
+*.zip
