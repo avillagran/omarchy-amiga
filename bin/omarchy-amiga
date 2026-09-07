@@ -9,20 +9,9 @@ MODE_FILE="$STATE_DIR/fs-uae-mode"
 LOOP_FILE="$STATE_DIR/loop"
 MUTE_FILE="$STATE_DIR/mute"
 LOG_FILE="$STATE_DIR/fs-uae.log"
+LAYER_PRELOAD="$(dirname "${BASH_SOURCE[0]}")/libomarchy-amiga-layer-shell-preload.so"
+SDL_SHIM="$(dirname "${BASH_SOURCE[0]}")/libomarchy-amiga-sdlshim.so"
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SHIM_DIR="$(dirname "${BASH_SOURCE[0]}")"
-case "$(uname -m)" in
-  x86_64|amd64)
-    [[ -r "$PLUGIN_DIR/bin/amiberry/x86_64/liblayer-shell-preload.so" ]] &&
-      LAYER_PRELOAD="$PLUGIN_DIR/bin/amiberry/x86_64/liblayer-shell-preload.so" ||
-      LAYER_PRELOAD=/usr/lib/liblayer-shell-preload.so
-    SDL_SHIM="$PLUGIN_DIR/bin/amiberry/x86_64/libomarchy-amiga-sdlshim.so"
-    ;;
-  *)
-    LAYER_PRELOAD="$SHIM_DIR/libomarchy-amiga-layer-shell-preload.so"
-    SDL_SHIM="$SHIM_DIR/libomarchy-amiga-sdlshim.so"
-    ;;
-esac
 
 bundled_amiberry() {
   local arch
@@ -257,7 +246,7 @@ start_demo() {
     local amiberry_chip amiberry_fast
     amiberry_chip=$(( (chip_memory + 511) / 512 ))
     amiberry_fast=$(awk "BEGIN { print int(($fast_memory + 0.999999)) }")
-    args=("$emulator" -G -s use_gui=no -s "cpu_type=$cpu_model"
+    args=("$emulator" -G -s "cpu_type=$cpu_model"
           -s "chipmem_size=$amiberry_chip"
           -s "fastmem_size=$amiberry_fast")
     [[ -n "$bundled_root" ]] && args+=( -s "data_dir=$bundled_root/share/amiberry" )
@@ -306,7 +295,7 @@ start_demo() {
     if [[ "$mode" == background ]]; then
       SDL_VIDEODRIVER=wayland \
       LD_PRELOAD="$SDL_SHIM:$LAYER_PRELOAD" \
-      LAYER_LAYER=bottom \
+      LAYER_LAYER=background \
       LAYER_ANCHOR=lrtb \
       LAYER_KEYBOARD=none \
       LAYER_NAMESPACE=omarchy-amiga \
@@ -327,13 +316,8 @@ start_demo() {
       printf '%s\n' "$child" > "$CHILD_PID_FILE"
       sleep 0.5
       apply_mute
-      local exit_status=0
-      wait "$child" || exit_status=$?
+      wait "$child" || true
       rm -f "$CHILD_PID_FILE"
-      if (( exit_status != 0 )); then
-        printf 'Amiberry stopped after failure (status=%s); not restarting\n' "$exit_status" >>"$LOG_FILE"
-        break
-      fi
       loop_enabled || break
       sleep 1
     done
