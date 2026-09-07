@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.avillagran.omarchy-amiga",
+  "name": "Amiga Demo Backgrounds",
+  "version": "0.2.0",
+  "author": "avillagran",
+  "description": "Runs Amiga DMS/ADF demos through Amiberry with FS-UAE fallback, in direct and background modes.",
+  "kinds": ["service"],
+  "entryPoints": {"service": "Service.qml"}
+}
