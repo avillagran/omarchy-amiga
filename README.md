@@ -1,15 +1,9 @@
 # Omarchy Amiga Demo Backgrounds
 
-Standalone Omarchy service for loading legal Amiga disk images through Amiberry,
-with FS-UAE as a fallback.
+Standalone Omarchy service for loading legal Amiga disk images through FS-UAE.
 
-Amiberry upstream: https://github.com/BlitterStudio/amiberry
-
-The plugin includes the Amiberry runtime and selects it automatically. It does
-not require `yay`, `pacman`, a compiler, or a separate emulator installation.
-Intel and AMD 64-bit systems use the same `x86_64` binary; ARM64 systems use
-`aarch64`. Each binary must be built against the Omarchy/Arch runtime; foreign
-Ubuntu/Fedora packages are not substituted with ABI symlinks.
+FS-UAE is the only emulator backend. The plugin does not bundle or invoke
+another emulator and requires the system `fs-uae` package.
 
 Supported input:
 
@@ -17,20 +11,74 @@ Supported input:
 - `.adf`
 
 The disk image is not modified. A Kickstart ROM, when required by a demo, must
-be supplied legally by the user in the normal Kickstart location shared with FS-UAE/Amiberry:
+be supplied legally by the user in the normal FS-UAE Kickstart location:
 
 ```text
 ~/Documents/FS-UAE/Kickstarts/
 ```
 
-## Install locally
+Kickstart ROMs are never downloaded by this plugin. A legal Kickstart is needed
+for reliable compatibility with original productions.
 
-From this directory:
+## Install
+
+Install the plugin through Omarchy:
 
 ```bash
-omarchy plugin install .
-omarchy plugin enable io.github.avillagran.omarchy-amiga
+omarchy plugin add https://github.com/avillagran/omarchy-amiga --enable --yes
 ```
+
+After a fresh install, prepare the host and run the diagnostic:
+
+```bash
+~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-install --install-deps
+```
+
+The command installs FS-UAE and its runtime libraries through `pacman`, creates
+the user media/Kickstart directories, and checks the system binary with `ldd`
+and `--version`. It never downloads ROMs or disk images. Use `--check` to skip
+package installation.
+
+To inspect a broken installation without changing anything:
+
+```bash
+~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-doctor
+```
+
+Generate one FS-UAE configuration per demo folder. The files stay beside the
+user-owned disk images and are not part of the repository:
+
+```bash
+~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-generate-fsuae
+```
+
+The generated configuration uses FS-UAE's internal AROS ROM, conservative
+A500/ECS defaults, and lists every disk in a multi-disk folder. Names containing
+`AGA`, `A1200`, or `CD32` select A1200/AGA. The launcher loads `omarchy.fs-uae`
+automatically when it is present.
+
+## Demo pack v0.1
+
+The demo media is distributed separately from Git. Download
+`omarchy-amiga-demos-v0.1.zip`, then install it with:
+
+```bash
+mkdir -p ~/Wallpapers/Amiga
+unzip -o omarchy-amiga-demos-v0.1.zip -d ~/Wallpapers/Amiga
+~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-generate-fsuae \
+  ~/Wallpapers/Amiga --force
+```
+
+Install FS-UAE and the plugin first if needed:
+
+```bash
+omarchy plugin add https://github.com/avillagran/omarchy-amiga --enable --yes
+~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-install --install-deps
+```
+
+The pack contains user-owned demo media only. It contains no Kickstart ROMs.
+FS-UAE uses its internal AROS ROM by default; legal user-supplied Kickstarts,
+when needed for a production, belong in `~/Documents/FS-UAE/Kickstarts/`.
 
 Put demos in:
 
@@ -46,7 +94,7 @@ bin/list.sh
 
 ## Run directly
 
-This launches Amiberry fullscreen when installed and preserves the original
+This launches FS-UAE fullscreen when installed and preserves the original
 demo timing and rendering:
 
 ```bash
@@ -68,12 +116,8 @@ omarchy-shell -q io.github.avillagran.omarchy-amiga stop
 
 ## Background mode
 
-`background` launches Amiberry inside a real `gtk4-layer-shell` background
-surface. On ARM64 the plugin uses its bundled preload; on x86_64 it references
-the native `/usr/lib/liblayer-shell-preload.so` supplied by Omarchy and uses
-the architecture-matched SDL shim. The demo remains an unmodified original
-disk image and continues to render through Amiberry. FS-UAE is used only when
-Amiberry is not installed.
+`background` launches FS-UAE inside a real `gtk4-layer-shell` background
+surface. The demo remains an unmodified original disk image.
 
 The active surface can be verified with:
 
@@ -86,13 +130,6 @@ launcher records the emulator result in the legacy state/log path:
 
 ```text
 ~/.local/state/omarchy/amiga/fs-uae.log
-
-## Amiberry runtime and license
-
-The bundled runtime is Amiberry 8.3.0, licensed under GPLv3. Its license is in
-`bin/amiberry/LICENSE`. The corresponding upstream source is available at:
-
-https://github.com/BlitterStudio/amiberry/tree/v8.3.0
+```
 
 Kickstart ROMs and demo disk images are not bundled by this plugin.
-```

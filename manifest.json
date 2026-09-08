@@ -4,7 +4,7 @@
   "name": "Amiga Demo Backgrounds",
   "version": "0.2.0",
   "author": "avillagran",
-  "description": "Runs Amiga DMS/ADF demos through Amiberry with FS-UAE fallback, in direct and background modes.",
+  "description": "Runs Amiga DMS/ADF demos through FS-UAE in direct and background modes.",
   "kinds": ["service"],
   "entryPoints": {"service": "Service.qml"}
 }

@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Resumable one-minute visual audit of user-owned Amiga demos."""
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import time
+from pathlib import Path
+
+
+def run(cmd, env=None, timeout=45):
+    try:
+        return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None
+
+
+def graphics_env():
+    env = os.environ.copy()
+    qs = run(["pgrep", "-x", "quickshell"], timeout=5)
+    pid = (qs.stdout.splitlines()[0] if qs and qs.stdout.splitlines() else "")
+    if pid:
+        try:
+            for item in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0"):
+                if b"=" in item:
+                    key, value = item.split(b"=", 1)
+                    env[key.decode(errors="ignore")] = value.decode(errors="ignore")
+        except OSError:
+            pass
+    return env
+
+
+def stop_all(launcher):
+    run([str(launcher), "stop"], timeout=20)
+    run(["pkill", "-TERM", "-x", "fs-uae"], timeout=5)
+    time.sleep(1)
+    run(["pkill", "-KILL", "-x", "fs-uae"], timeout=5)
+
+
+def capture(path, env):
+    result = run(["grim", str(path)], env=env, timeout=30)
+    if not result or result.returncode != 0 or not path.exists():
+        return False
+    return True
+
+
+def evidence(path, env):
+    text = ""
+    ocr = run(["tesseract", str(path), "stdout", "--psm", "6"], env=env, timeout=30)
+    if ocr:
+        text = ocr.stdout[-5000:]
+    mean = 0.0
+    identify = shutil.which("convert") or shutil.which("magick")
+    if identify:
+        metric = run([identify, str(path), "-colorspace", "Gray", "-format", "%[fx:mean]", "info:"], timeout=30)
+        if metric:
+            try:
+                mean = float(metric.stdout.strip())
+            except ValueError:
+                pass
+    lower = text.lower()
+    fallback = any(word in lower for word in ("aros", "workbench", "guru meditation", "file is not executable"))
+    visible = mean > 0.015 and not fallback
+    return {"ocr": text, "mean": mean, "fallback_text": fallback, "visible": visible}
+
+
+def make_config(folder, disks, alternate=False):
+    aga = any(token in " ".join(p.name.lower() for p in disks) for token in ("aga", "a1200", "cd32"))
+    if alternate:
+        model, chipset, accuracy = "A500", "OCS", "1"
+    else:
+        model, chipset, accuracy = (("A1200", "AGA", "100") if aga else ("A500", "ECS", "100"))
+    lines = [
+        "# [Configuración Base Legal]",
+        "kickstart_file = internal",
+        f"amiga_model = {model}",
+        f"chipset = {chipset}",
+        f"accuracy = {accuracy}",
+        "floppy_drive_speed = 100",
+        "ntsc = 0",
+        "slow_memory = 512",
+        "fast_memory = 0",
+        "keep_aspect_ratio = 1",
+        "grab_input = 0",
+    ]
+    for index, disk in enumerate(disks):
+        lines.append(f"floppy_drive_{index} = $CONFIG/{disk.name}")
+    return "\n".join(lines) + "\n"
+
+
+def classify(attempts):
+    for attempt in attempts:
+        if attempt["alive"] and attempt["capture"] and attempt["evidence"]["visible"]:
+            return "working"
+    if any(a["evidence"].get("fallback_text") for a in attempts if a["capture"]):
+        return "fallback-screen"
+    if any(a["launched"] and not a["alive"] for a in attempts):
+        return "crashed"
+    return "unverified-visual"
+
+
+def write_html(path, results, total):
+    rows = []
+    for row in results:
+        attempts = []
+        for attempt in row["attempts"]:
+            capture_path = html.escape(attempt.get("capture_path", ""))
+            attempts.append(f"<div><b>{html.escape(attempt['name'])}</b> alive={attempt['alive']} capture={attempt['capture']}<br><a href='{capture_path}'><img src='{capture_path}' loading='lazy'></a><pre>{html.escape(attempt['evidence'].get('ocr',''))}</pre></div>")
+        rows.append(f"<article><h2>{row['index']}. {html.escape(row['folder'])} — {html.escape(row['status'])}</h2><p>{html.escape(row['disk'])}</p>{''.join(attempts)}</article>")
+    path.write_text("<!doctype html><meta charset='utf-8'><title>FS-UAE Amiga audit</title><style>body{font:14px sans-serif;background:#111;color:#ddd}article{border:1px solid #444;padding:12px;margin:12px}img{max-width:720px;image-rendering:auto}pre{white-space:pre-wrap;max-height:180px;overflow:auto;background:#222;padding:8px}</style><h1>FS-UAE Amiga audit</h1><p>Completed %d/%d</p>%s" % (len(results), total, "".join(rows)), encoding="utf-8")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root", nargs="?", default="~/tmp/amiga-demos-pages4plus")
+    parser.add_argument("--out", default="~/amiga")
+    parser.add_argument("--seconds", type=int, default=60)
+    parser.add_argument("--start", type=int, default=0)
+    parser.add_argument("--end", type=int)
+    args = parser.parse_args()
+    root = Path(args.root).expanduser().resolve()
+    out = Path(args.out).expanduser().resolve()
+    captures = out / "captures"
+    out.mkdir(parents=True, exist_ok=True)
+    captures.mkdir(exist_ok=True)
+    launcher = Path.home() / "tmp/omarchy-amiga-fsuae/bin/omarchy-amiga"
+    items = []
+    for folder in sorted({p.parent for p in root.rglob("*") if p.is_file() and p.suffix.lower() in {".adf", ".dms"}}):
+        disks = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".adf", ".dms"})
+        if disks:
+            items.append((folder, disks))
+    end = min(args.end if args.end is not None else len(items), len(items))
+    result_file = out / "results.json"
+    html_file = out / "report.html"
+    results = json.loads(result_file.read_text()) if result_file.exists() else []
+    done = {r["folder"] for r in results}
+    for index in range(args.start, end):
+        folder, disks = items[index]
+        if folder.name in done:
+            continue
+        env = graphics_env()
+        config = folder / "omarchy.fs-uae"
+        original = config.read_text(encoding="utf-8") if config.exists() else None
+        attempts = []
+        for attempt_index, alternate in enumerate((False, True)):
+            if attempt_index == 1 and attempts[0]["alive"] and attempts[0]["evidence"]["visible"]:
+                break
+            config.write_text(make_config(folder, disks, alternate), encoding="utf-8")
+            stop_all(launcher)
+            try:
+                subprocess.Popen([str(launcher), "start", str(disks[0]), "background"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                launched = True
+            except OSError:
+                launched = False
+            time.sleep(args.seconds)
+            process = run(["pgrep", "-x", "fs-uae"], timeout=5)
+            alive = bool(process and process.returncode == 0)
+            capture_file = captures / f"{index + 1:04d}-{folder.name}-{attempt_index + 1}.png"
+            captured = capture(capture_file, env)
+            ev = evidence(capture_file, env) if captured else {"ocr": "", "mean": 0.0, "fallback_text": False, "visible": False}
+            attempts.append({"name": "alternate" if alternate else "primary", "config": make_config(folder, disks, alternate), "launched": launched, "alive": alive, "capture": captured, "capture_path": str(capture_file.relative_to(out)), "evidence": ev, "tested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+            stop_all(launcher)
+        if original is not None:
+            config.write_text(original, encoding="utf-8")
+        row = {"index": index + 1, "folder": folder.name, "disk": str(disks[0]), "disk_count": len(disks), "status": classify(attempts), "attempts": attempts}
+        results = [r for r in results if r["folder"] != folder.name] + [row]
+        results.sort(key=lambda r: r["index"])
+        result_file.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_html(html_file, results, len(items))
+        print(f"{index + 1}/{len(items)} {folder.name} {row['status']}", flush=True)
+    write_html(html_file, results, len(items))
+    print(f"done={len(results)} total={len(items)}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
