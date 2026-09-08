@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Generate legal, user-local FS-UAE configurations for Amiga disks."""
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+DISK_SUFFIXES = {".adf", ".dms"}
+
+
+def config_for(folder: Path, disks: list[Path]) -> str:
+    names = " ".join(d.name.lower() for d in disks)
+    aga = any(token in names for token in ("aga", "a1200", "cd32"))
+    model = "A1200" if aga else "A500"
+    chipset = "AGA" if aga else "ECS"
+    lines = [
+        "# [Configuración Base Legal]",
+        "kickstart_file = internal",
+        f"amiga_model = {model}",
+        f"chipset = {chipset}",
+        "accuracy = 100",
+        "floppy_drive_speed = 100",
+        "ntsc = 0",
+        "slow_memory = 512",
+        "fast_memory = 0",
+        "keep_aspect_ratio = 1",
+        "grab_input = 0",
+    ]
+    for index, disk in enumerate(disks):
+        relative = Path(os.path.relpath(disk, folder)).as_posix()
+        lines.append(f"floppy_drive_{index} = $CONFIG/{relative}")
+    return "\n".join(lines) + "\n"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", nargs="?", default="~/Wallpapers/Amiga")
+    parser.add_argument("--force", action="store_true", help="replace generated config files")
+    args = parser.parse_args()
+    root = Path(args.root).expanduser().resolve()
+    if not root.is_dir():
+        print(f"media directory does not exist: {root}")
+        return 0
+
+    generated = skipped = disks_seen = 0
+    folders = sorted({p.parent for p in root.rglob("*") if p.is_file() and p.suffix.lower() in DISK_SUFFIXES})
+    for folder in folders:
+        disks = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in DISK_SUFFIXES)
+        if not disks:
+            continue
+        disks_seen += len(disks)
+        target = folder / "omarchy.fs-uae"
+        if target.exists() and not args.force:
+            skipped += 1
+            continue
+        target.write_text(config_for(folder, disks), encoding="utf-8")
+        generated += 1
+
+    print(f"folders={len(folders)} disks={disks_seen} generated={generated} skipped={skipped}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

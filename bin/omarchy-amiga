@@ -9,20 +9,14 @@ MODE_FILE="$STATE_DIR/fs-uae-mode"
 LOOP_FILE="$STATE_DIR/loop"
 MUTE_FILE="$STATE_DIR/mute"
 LOG_FILE="$STATE_DIR/fs-uae.log"
-LAYER_PRELOAD="$(dirname "${BASH_SOURCE[0]}")/libomarchy-amiga-layer-shell-preload.so"
-SDL_SHIM="$(dirname "${BASH_SOURCE[0]}")/libomarchy-amiga-sdlshim.so"
-PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-bundled_amiberry() {
-  local arch
-  case "$(uname -m)" in
-    aarch64|arm64) arch=aarch64 ;;
-    x86_64|amd64) arch=x86_64 ;;
-    *) return 1 ;;
-  esac
-  [[ -x "$PLUGIN_DIR/bin/amiberry/$arch/amiberry" ]] || return 1
-  printf '%s\n' "$PLUGIN_DIR/bin/amiberry/$arch/amiberry"
-}
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "$(uname -m)" in
+  aarch64|arm64) helper_suffix='' ;;
+  x86_64|amd64) helper_suffix='.x86_64' ;;
+  *) printf 'Unsupported architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+LAYER_PRELOAD="$SCRIPT_DIR/libomarchy-amiga-layer-shell-preload${helper_suffix}.so"
+SDL_SHIM="$SCRIPT_DIR/libomarchy-amiga-sdlshim${helper_suffix}.so"
 
 mkdir -p "$STATE_DIR"
 
@@ -42,16 +36,14 @@ running_pid() {
   local pid child
   pid="$(read_pid 2>/dev/null || true)"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || return 1
-  if [[ "$(ps -o comm= -p "$pid" 2>/dev/null || true)" == "fs-uae" ||
-        "$(ps -o comm= -p "$pid" 2>/dev/null || true)" == "amiberry" ]]; then
+  if [[ "$(ps -o comm= -p "$pid" 2>/dev/null || true)" == "fs-uae" ]]; then
     printf '%s\n' "$pid"
     return 0
   fi
   child="$(cat "$CHILD_PID_FILE" 2>/dev/null || true)"
   [[ "$child" =~ ^[0-9]+$ ]] || return 1
   kill -0 "$child" 2>/dev/null || return 1
-  [[ "$(ps -o comm= -p "$child" 2>/dev/null || true)" == "fs-uae" ||
-     "$(ps -o comm= -p "$child" 2>/dev/null || true)" == "amiberry" ]] || return 1
+  [[ "$(ps -o comm= -p "$child" 2>/dev/null || true)" == "fs-uae" ]] || return 1
   printf '%s\n' "$pid"
 }
 
@@ -77,7 +69,7 @@ stop_demo() {
       cmdline="$(tr '\0' ' ' < "/proc/$candidate/cmdline" 2>/dev/null || true)"
       [[ "$cmdline" == *"--floppy-drive-0=$image"* || "$cmdline" == *"$image"* ]] || continue
       kill -TERM "$candidate" 2>/dev/null || true
-    done < <({ pgrep -x fs-uae; pgrep -x amiberry; } 2>/dev/null || true)
+    done < <(pgrep -x fs-uae 2>/dev/null || true)
     for _ in {1..30}; do
       remaining=0
       while read -r candidate; do
@@ -86,7 +78,7 @@ stop_demo() {
         [[ "$cmdline" == *"--floppy-drive-0=$image"* || "$cmdline" == *"$image"* ]] || continue
         remaining=1
         break
-      done < <({ pgrep -x fs-uae; pgrep -x amiberry; } 2>/dev/null || true)
+      done < <(pgrep -x fs-uae 2>/dev/null || true)
       (( remaining == 0 )) && break
       sleep 0.1
     done
@@ -95,7 +87,7 @@ stop_demo() {
       cmdline="$(tr '\0' ' ' < "/proc/$candidate/cmdline" 2>/dev/null || true)"
       [[ "$cmdline" == *"--floppy-drive-0=$image"* || "$cmdline" == *"$image"* ]] || continue
       kill -KILL "$candidate" 2>/dev/null || true
-    done < <({ pgrep -x fs-uae; pgrep -x amiberry; } 2>/dev/null || true)
+    done < <(pgrep -x fs-uae 2>/dev/null || true)
   fi
   rm -f "$PID_FILE"
   rm -f "$CHILD_PID_FILE"
@@ -143,8 +135,7 @@ apply_mute() {
     pactl set-sink-input-mute "$id" "$mute" >/dev/null 2>&1 || true
   done < <(pactl list sink-inputs 2>/dev/null | awk '
     /^Sink Input #[0-9]+/ { id=$3; sub(/^#/, "", id) }
-    /application.name = "FS-UAE"/ || /node.name = "fs-uae"/ ||
-    /application.name = "Amiberry"/ || /node.name = "amiberry"/ { print id }
+    /application.name = "FS-UAE"/ || /node.name = "fs-uae"/ { print id }
   ')
 }
 
@@ -193,25 +184,28 @@ except (ValueError, IndexError, KeyError, TypeError, json.JSONDecodeError):
 
 start_demo() {
   local image="${1:-}" mode="${2:-direct}"
-  local demo_dir cpu_model chip_memory fast_memory hardware_file key value
+  local demo_dir cpu_model chip_memory fast_memory hardware_file config_file key value
   [[ -n "$image" ]] || { usage; exit 2; }
   [[ -f "$image" ]] || { printf 'Amiga disk not found: %s\n' "$image" >&2; exit 1; }
   case "${image##*.}" in
     dms|DMS|adf|ADF) ;;
     *) printf 'Unsupported Amiga disk format: %s (expected .dms or .adf)\n' "$image" >&2; exit 2 ;;
   esac
-  local emulator bundled_root
-  emulator="$(bundled_amiberry 2>/dev/null || command -v amiberry 2>/dev/null || command -v fs-uae 2>/dev/null || true)"
-  [[ -n "$emulator" ]] || { printf 'amiberry or fs-uae is required but neither was found\n' >&2; exit 127; }
-  bundled_root=""
-  if [[ "$emulator" == "$PLUGIN_DIR/bin/amiberry/"* ]]; then
-    bundled_root="$(dirname "$emulator")"
-    export LD_LIBRARY_PATH="$bundled_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  fi
+  local emulator
+  emulator="$(command -v fs-uae 2>/dev/null || true)"
+  [[ -n "$emulator" ]] || { printf 'fs-uae is required; install it with bin/omarchy-amiga-install --install-deps\n' >&2; exit 127; }
   [[ "$mode" == direct || "$mode" == background ]] || { printf 'Mode must be direct or background\n' >&2; exit 2; }
 
   image="$(realpath "$image")"
   demo_dir="$(dirname "$image")"
+  config_file="${image%.*}.fs-uae"
+  if [[ ! -r "$config_file" ]]; then
+    config_file=""
+    shopt -s nullglob
+    config_candidates=("$demo_dir"/*.fs-uae)
+    shopt -u nullglob
+    (( ${#config_candidates[@]} == 1 )) && config_file="${config_candidates[0]}"
+  fi
   stop_audio_background
   stop_demo
   [[ -e "$LOOP_FILE" ]] || printf 'on\n' > "$LOOP_FILE"
@@ -239,50 +233,28 @@ start_demo() {
     done < "$hardware_file"
   fi
   local -a args
-  if [[ "$(basename "$emulator")" == "amiberry" ]]; then
-    # Amiberry's -C/-c/-F shorthands abort this build. Use the stable
-    # key=value overrides: chipmem_size is in 512 KiB units and fastmem_size
-    # is in MiB. -G selects the no-GUI emulation path.
-    local amiberry_chip amiberry_fast
-    amiberry_chip=$(( (chip_memory + 511) / 512 ))
-    amiberry_fast=$(awk "BEGIN { print int(($fast_memory + 0.999999)) }")
-    args=("$emulator" -G -s "cpu_type=$cpu_model"
-          -s "chipmem_size=$amiberry_chip"
-          -s "fastmem_size=$amiberry_fast")
-    [[ -n "$bundled_root" ]] && args+=( -s "data_dir=$bundled_root/share/amiberry" )
-    args+=( -0 "$image" )
+  if [[ -n "$config_file" ]]; then
+    args=("$emulator" "$config_file")
   else
-    args=(fs-uae
+    args=("$emulator"
           "--cpu-model=$cpu_model"
           "--chip-memory=$chip_memory"
           "--fast-memory=$fast_memory"
           "--floppy-drive-0=$image")
   fi
   if [[ "$mode" == direct ]]; then
-    [[ "$(basename "$emulator")" == "fs-uae" ]] &&
-      args+=( '--fullscreen=1' '--keep-aspect=1' )
+    args+=( '--fullscreen=1' '--keep-aspect=1' )
   else
     # A wallpaper emulator must never grab the host pointer/keyboard when its
     # window receives focus. These are FS-UAE's input-grab settings; direct
     # mode intentionally keeps normal emulator input behavior.
-    if [[ "$(basename "$emulator")" == "amiberry" ]]; then
-      args+=( -s fullscreen=0 -s borderless=1 -s keep_aspect=0
-              -s automatic_input_grab=0 -s initial_input_grab=0
-              -s keyboard_input_grab=0 )
-    else
-      args+=( '--fullscreen=0' '--borderless=1' '--keep-aspect=0'
-              '--automatic-input-grab=0'
-              '--initial-input-grab=0'
-              '--keyboard-input-grab=0' )
-    fi
+    args+=( '--fullscreen=0' '--borderless=1' '--keep-aspect=0'
+            '--automatic-input-grab=0'
+            '--initial-input-grab=0'
+            '--keyboard-input-grab=0' )
     if size="$(monitor_size 2>/dev/null || true)" && [[ "$size" =~ ^-?[0-9]+[[:space:]]-?[0-9]+[[:space:]]-?[0-9]+[[:space:]]-?[0-9]+$ ]]; then
       read -r width height x y <<< "$size"
-      if [[ "$(basename "$emulator")" == "amiberry" ]]; then
-        args+=( -s "window_width=$width" -s "window_height=$height"
-                -s "window_x=$x" -s "window_y=$y" )
-      else
-        args+=( "--window-width=$width" "--window-height=$height" "--window-x=$x" "--window-y=$y" )
-      fi
+      args+=( "--window-width=$width" "--window-height=$height" "--window-x=$x" "--window-y=$y" )
     fi
   fi
 

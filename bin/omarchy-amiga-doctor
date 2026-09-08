@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -u
+
+export LC_ALL=C
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PLUGIN_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+failures=0
+say() { printf '%s\n' "$*"; }
+fail() { say "FAIL: $*"; failures=$((failures + 1)); }
+warn() { say "WARN: $*"; }
+
+if ! command -v fs-uae >/dev/null 2>&1; then
+  fail 'FS-UAE is missing; run bin/omarchy-amiga-install --install-deps'
+  fsuae=''
+else
+  fsuae="$(command -v fs-uae)"
+  say "fs-uae=$fsuae"
+  if command -v file >/dev/null 2>&1; then file "$fsuae"; fi
+  missing=$(ldd "$fsuae" 2>&1 | awk '/not found/ { print $1 }')
+  if [[ -n "$missing" ]]; then
+    fail "missing shared libraries: $(printf '%s' "$missing" | tr '\n' ' ')"
+  else
+    say 'shared-libraries=ok'
+  fi
+  version=$({ "$fsuae" --version; } 2>&1 || true)
+  if [[ "$version" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ || "$version" == FS-UAE* ]]; then
+    say "${version%%$'\n'*}"
+  else
+    fail 'FS-UAE cannot start'
+    say "$version"
+  fi
+fi
+
+rom_dirs=(
+  "$HOME/Documents/FS-UAE/Kickstarts"
+  "$HOME/ROMs"
+)
+rom_count=0
+for dir in "${rom_dirs[@]}"; do
+  [[ -d "$dir" ]] || continue
+  count=$(find "$dir" -maxdepth 1 -type f \( -iname '*.rom' -o -iname '*.bin' \) ! -name 'aros-*' | wc -l)
+  rom_count=$((rom_count + count))
+done
+if (( rom_count == 0 )); then
+  warn 'no legal Amiga Kickstart ROM found; AROS fallback has limited compatibility'
+else
+  say "kickstart-roms=$rom_count"
+fi
+
+media_root="${AMIGA_WALLPAPER_DIR:-$HOME/Wallpapers/Amiga}"
+if [[ -d "$media_root" ]]; then
+  disk_count=$(find "$media_root" -type f \( -iname '*.adf' -o -iname '*.dms' \) | wc -l)
+  say "disk-images=$disk_count"
+else
+  warn "media directory does not exist yet: $media_root"
+fi
+
+if (( failures )); then
+  say "doctor=failed checks=$failures"
+  exit 1
+fi
+say 'doctor=ok'

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Prepare system dependencies and user directories for Amiga Demo Backgrounds.
+# ROMs and disk images are intentionally never downloaded by this script.
+
+export LC_ALL=C
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PLUGIN_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+DOCTOR="$SCRIPT_DIR/omarchy-amiga-doctor"
+GENERATOR="$SCRIPT_DIR/omarchy-amiga-generate-fsuae"
+
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: omarchy-amiga-install [--check|--install-deps]
+
+  --check          Prepare user directories and run diagnostics (default).
+  --install-deps  Also install runtime packages with pacman when available.
+EOF
+}
+
+mode=check
+case "${1:-}" in
+  "") ;;
+  --check) ;;
+  --install-deps) mode=install ;;
+  -h|--help) usage; exit 0 ;;
+  *) usage; exit 2 ;;
+esac
+
+mkdir -p "${AMIGA_WALLPAPER_DIR:-$HOME/Wallpapers/Amiga}"
+mkdir -p "$HOME/Documents/FS-UAE/Kickstarts"
+
+"$GENERATOR" "${AMIGA_WALLPAPER_DIR:-$HOME/Wallpapers/Amiga}"
+
+if [[ "$mode" == install ]]; then
+  if ! command -v pacman >/dev/null 2>&1; then
+    printf '%s\n' 'omarchy-amiga-install: pacman is not available; skipping system packages.' >&2
+  else
+    packages=(
+      fs-uae curl dbus flac libglvnd libmpeg2 libpcap libpng
+      mpg123 portmidi sdl2 sdl2_image wayland zlib zstd
+    )
+    sudo pacman -S --needed "${packages[@]}"
+  fi
+fi
+
+"$DOCTOR" || exit $?
