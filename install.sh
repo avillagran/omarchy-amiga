@@ -45,7 +45,9 @@ omarchy-shell shell rescanPlugins
 
 installer="$PLUGIN_DIR/bin/omarchy-amiga-install"
 [[ -x $installer ]] || { printf '%s\n' "Missing plugin installer: $installer" >&2; exit 1; }
-"$installer" --install-deps
+if ! "$installer" --check; then
+  "$installer" --install-deps
+fi
 
 mkdir -p "$MEDIA_DIR"
 temporary=$(mktemp "${TMPDIR:-/tmp}/omarchy-amiga-pack.XXXXXX.zip")
