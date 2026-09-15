@@ -196,11 +196,19 @@ try:
     data = json.load(open(path))
 except (OSError, ValueError):
     data = {}
-plugins = data.setdefault('plugins', {})
-plugins[plugin_id] = True
-for conflicting in ('omarchy.idle', 'io.github.avillagran.omarchy-amiga'):
-    if plugins.get(conflicting):
-        plugins[conflicting] = False
+plugins = data.get('plugins')
+if isinstance(plugins, dict):  # future shape: id -> bool
+    plugins[plugin_id] = True
+    for conflicting in ('omarchy.idle', 'io.github.avillagran.omarchy-amiga'):
+        if plugins.get(conflicting):
+            plugins[conflicting] = False
+elif isinstance(plugins, list):  # current shape: enabled ids
+    if plugin_id not in plugins:
+        plugins.append(plugin_id)
+    plugins[:] = [p for p in plugins
+                  if p not in ('omarchy.idle', 'io.github.avillagran.omarchy-amiga')]
+else:
+    data['plugins'] = [plugin_id]
 json.dump(data, open(path, 'w'), indent=2)
 PY
   log "plugin $plugin_id enabled in shell.json"
