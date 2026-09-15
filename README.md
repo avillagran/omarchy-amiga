@@ -25,7 +25,7 @@ for reliable compatibility with original productions.
 Install the plugin, enable it, install FS-UAE dependencies, and download the verified example pack with one command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/AMIGATESTS/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/e7bd05a7471f630adb2c119b73490720c5787c5e/install.sh | bash
 ```
 
 The installer verifies the release asset before extracting it into `~/Wallpapers/Amiga`; it never downloads Kickstart ROMs. Re-running it is safe and preserves existing user media.
@@ -33,13 +33,13 @@ The installer verifies the release asset before extracting it into `~/Wallpapers
 Remove the plugin while preserving downloaded demos, configurations, previews, and user-supplied ROMs:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/AMIGATESTS/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/e7bd05a7471f630adb2c119b73490720c5787c5e/install.sh | bash -s -- --uninstall
 ```
 
 To inspect the installer before running it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/AMIGATESTS/install.sh
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/e7bd05a7471f630adb2c119b73490720c5787c5e/install.sh
 ```
 
 The installer installs FS-UAE and its runtime libraries through `pacman`, creates
