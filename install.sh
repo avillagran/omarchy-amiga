@@ -23,6 +23,12 @@ RUNTIME_DIR=$HOME/.local/lib/omarchy-amiga-runtime
 PACK_DIR=$HOME/Wallpapers/AMIGA
 PLUGIN_MARKER=.omarchy-amiga-native
 
+# bin/omarchy-launch-screensaver from avillagran/omarchy @ 2e245dff — the
+# packaged Omarchy launcher has no Amiga branch yet; the user-local bin dir
+# precedes /usr/bin in Omarchy's PATH, so this shadows it safely.
+LAUNCHER_URL="https://raw.githubusercontent.com/avillagran/omarchy/2e245dff86de9c512e4fba266158857bb36434b6/bin/omarchy-launch-screensaver"
+LAUNCHER_SHA=c17dc730f2eadeb8a8bbbe8dfa3a45f2bbca599506bd472d43f549d4a848417a
+
 log() { printf 'amiga-install: %s\n' "$*"; }
 fail() { printf 'amiga-install: ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -107,6 +113,12 @@ install_runtime() {
 
 install_wrapper() {
   mkdir -p "$HOME/.local/bin"
+  local tmp
+  tmp=$(mktemp)
+  fetch "$LAUNCHER_URL" "$tmp"
+  verify_sha "$tmp" "$LAUNCHER_SHA"
+  mv "$tmp" "$HOME/.local/bin/omarchy-launch-screensaver"
+  chmod 755 "$HOME/.local/bin/omarchy-launch-screensaver"
   cat > "$HOME/.local/bin/omarchy-screensaver-amiga" <<'WRAPPER'
 #!/bin/bash
 
@@ -267,8 +279,8 @@ do_install() {
 # --------------------------------------------------------------- uninstall ---
 
 do_uninstall() {
-  rm -f "$HOME/.local/bin/omarchy-screensaver-amiga"
-  log 'wrapper removed'
+  rm -f "$HOME/.local/bin/omarchy-screensaver-amiga" "$HOME/.local/bin/omarchy-launch-screensaver"
+  log 'wrapper and launcher removed'
 
   if [[ -d $RUNTIME_DIR ]]; then
     tar --zstd -cf "$BACKUP_DIR/runtime-removed-$(date +%Y%m%d-%H%M%S).tar.zst" \
