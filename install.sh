@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Omarchy native Amiga screensaver — one-liner installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.2/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.3/install.sh | bash
 #
 # Safe to re-run. `--uninstall` removes what this script installed and restores
 # backed-up Omarchy state; user media (the demo pack) is always preserved.
 
 set -euo pipefail
 
-TAG=native-v0.2
+TAG=native-v0.3
 REPO=avillagran/omarchy-amiga
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
-RUNTIME_X86_64_SHA=db6df7afb0349fe64290dc3d7c8e17ab5a7fb1e49bd60ee4d97bbe2c0da90b04
-RUNTIME_AARCH64_SHA=2118ee43103163991676a90b329db90060a0c502170493082a5ece6f05e1e9d6
+RUNTIME_X86_64_SHA=d92699ff8601c59d28cbc4f927c9cea51fb12e7fb90b93dbcb6cabed77b9c121
+RUNTIME_AARCH64_SHA=f789c019b6934c55a5379d47a2d7364bba1187ccfe714d45537fdc7a3b950a03
 PACK_SHA=6c38d7ed2c289c4eaa352af5e6a8128a950329a223a64dfc2bc9693ce73b6f08
 
 OMARCHY_DIR=${OMARCHY_DIR:-$HOME/.config/omarchy}
@@ -23,11 +23,14 @@ RUNTIME_DIR=$HOME/.local/lib/omarchy-amiga-runtime
 PACK_DIR=$HOME/Wallpapers/AMIGA
 PLUGIN_MARKER=.omarchy-amiga-native
 
-# bin/omarchy-launch-screensaver from avillagran/omarchy @ 2e245dff — the
-# packaged Omarchy launcher has no Amiga branch yet; the user-local bin dir
-# precedes /usr/bin in Omarchy's PATH, so this shadows it safely.
+# bin/omarchy-launch-screensaver from avillagran/omarchy @ 2e245dff. Stock
+# Omarchy has no Amiga branch and its session PATH places /usr/share/omarchy/bin
+# before ~/.local/bin, so the installed plugin/menu call this pinned user-local
+# launcher explicitly instead of relying on command shadowing.
 LAUNCHER_URL="https://raw.githubusercontent.com/avillagran/omarchy/2e245dff86de9c512e4fba266158857bb36434b6/bin/omarchy-launch-screensaver"
 LAUNCHER_SHA=c17dc730f2eadeb8a8bbbe8dfa3a45f2bbca599506bd472d43f549d4a848417a
+SETUP_URL="https://raw.githubusercontent.com/avillagran/omarchy/2e245dff86de9c512e4fba266158857bb36434b6/bin/omarchy-setup-screensaver"
+SETUP_SHA=d422abfd17f8901aee010a3ceda1c6a3810512c30c410a83e8cc3f3791ad3be6
 
 log() { printf 'amiga-install: %s\n' "$*"; }
 fail() { printf 'amiga-install: ERROR: %s\n' "$*" >&2; exit 1; }
@@ -56,6 +59,25 @@ require_tools() {
   ((${#missing[@]} == 0)) || fail "missing tools: ${missing[*]}"
 }
 
+verify_staged_runtime() { # verify_staged_runtime <runtime-root>
+  local root=$1
+  PYTHONPATH="$root/controller" python3 - "$root" <<'PY'
+import sys
+import runtime
+
+root = sys.argv[1]
+required = (
+    'fs-uae/FRAME_PROTOCOL', 'fs-uae/bin/fs-uae',
+    'audio/libopenal.so.1', 'audio/libamiga-pulse.so',
+    'bin/gl-probe', 'guard/AmigaInput/libamigainput.so',
+    'guard/AmigaInput/qmldir', 'guard/Guard.qml',
+)
+runtime.verify(root, required)
+PY
+  [[ $(<"$root/fs-uae/FRAME_PROTOCOL") == 1 ]] \
+    || fail 'FS-UAE frame protocol 1 is required; rebuild the private runtime'
+}
+
 runtime_asset_for() {
   case "$(uname -m)" in
   x86_64) echo "$BASE_URL/omarchy-amiga-runtime-x86_64.tar.zst" ;;
@@ -80,6 +102,114 @@ backup_once() { # backup_once <file> — keep first copy only
   fi
 }
 
+enable_plugin_in_shell_json() { # enable_plugin_in_shell_json <shell.json> <plugin-id>
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+path, plugin_id = sys.argv[1], sys.argv[2]
+try:
+    data = json.load(open(path))
+except (OSError, ValueError):
+    data = {}
+plugins = data.get('plugins')
+conflicting = {'omarchy.idle', 'io.github.avillagran.omarchy-amiga'}
+if isinstance(plugins, dict):  # future shape: id -> bool
+    plugins[plugin_id] = True
+    for plugin in conflicting:
+        if plugins.get(plugin):
+            plugins[plugin] = False
+elif isinstance(plugins, list):  # current shapes: strings or {id: ...} entries
+    object_shape = any(isinstance(entry, dict) for entry in plugins)
+    def entry_id(entry):
+        return entry.get('id') if isinstance(entry, dict) else entry
+    plugins[:] = [entry for entry in plugins
+                  if entry_id(entry) not in conflicting | {plugin_id}]
+    plugins.append({'id': plugin_id} if object_shape else plugin_id)
+else:
+    data['plugins'] = [plugin_id]
+disabled = data.get('disabledPlugins')
+if not isinstance(disabled, list):
+    disabled = []
+disabled = [entry for entry in disabled if entry != plugin_id]
+if 'omarchy.idle' not in disabled:
+    disabled.append('omarchy.idle')
+data['disabledPlugins'] = disabled
+restores = data.get('cloneSourceRestores')
+if not isinstance(restores, list):
+    restores = []
+if plugin_id not in restores:
+    restores.append(plugin_id)
+data['cloneSourceRestores'] = restores
+json.dump(data, open(path, 'w'), indent=2)
+PY
+}
+
+pin_plugin_launcher() { # pin_plugin_launcher <Service.qml>
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+old = '|| omarchy-launch-screensaver")'
+new = '|| \\"$HOME/.local/bin/omarchy-launch-screensaver\\"")'
+pinned = '$HOME/.local/bin/omarchy-launch-screensaver'
+if old in text:
+    path.write_text(text.replace(old, new))
+elif pinned not in text:
+    raise SystemExit('Amiga idle service has no recognized screensaver launcher')
+PY
+}
+
+install_menu_entries() { # install_menu_entries <user-menu.jsonc>
+  python3 - "$1" <<'PY'
+import json, re, sys
+path = sys.argv[1]
+try:
+    text = open(path).read()
+except OSError:
+    text = '{}'
+text = re.sub(r'^\s*//.*$', '', text, flags=re.M)
+text = re.sub(r',\s*([}\]])', r'\1', text)
+try:
+    data = json.loads(text)
+except ValueError as error:
+    raise SystemExit('invalid Omarchy menu extension: ' + str(error))
+data.update({
+    'style.screensaver.omarchy': {
+        'icon': '󱄄', 'label': 'Default',
+        'checked': 'omarchy-setup-screensaver --is-default',
+        'action': 'omarchy-setup-screensaver default',
+    },
+    'style.screensaver.amiga': {
+        'icon': '󰊗', 'label': 'Amiga',
+        'checked': 'omarchy-setup-screensaver --is-amiga',
+        'action': 'omarchy-setup-screensaver amiga',
+    },
+    'style.screensaver.preview': {
+        'icon': '', 'label': 'Preview',
+        'action': '"$HOME/.local/bin/omarchy-launch-screensaver" force',
+    },
+    'system.screensaver': {
+        'action': '"$HOME/.local/bin/omarchy-launch-screensaver" force',
+    },
+})
+with open(path, 'w') as stream:
+    json.dump(data, stream, ensure_ascii=False, indent=2)
+    stream.write('\n')
+PY
+}
+
+install_menu() {
+  local menu="$OMARCHY_DIR/extensions/omarchy-menu.jsonc"
+  mkdir -p "${menu%/*}" "$BACKUP_DIR"
+  if [[ -f $menu ]]; then
+    backup_once "$menu"
+  else
+    touch "$BACKUP_DIR/omarchy-menu.jsonc.missing"
+  fi
+  install_menu_entries "$menu"
+  log 'Style > Screensaver menu entries installed'
+}
+
 # ---------------------------------------------------------------- install ---
 
 install_runtime() {
@@ -93,7 +223,7 @@ install_runtime() {
 
   staging=$(mktemp -d)
   tar --zstd -xf "$tmp" -C "$staging"
-  python3 "$staging/omarchy-amiga-runtime/controller/state.py" --check-runtime \
+  verify_staged_runtime "$staging/omarchy-amiga-runtime" \
     || fail 'downloaded runtime failed its own integrity check'
 
   if [[ -d $RUNTIME_DIR ]]; then
@@ -119,6 +249,13 @@ install_wrapper() {
   verify_sha "$tmp" "$LAUNCHER_SHA"
   mv "$tmp" "$HOME/.local/bin/omarchy-launch-screensaver"
   chmod 755 "$HOME/.local/bin/omarchy-launch-screensaver"
+
+  tmp=$(mktemp)
+  fetch "$SETUP_URL" "$tmp"
+  verify_sha "$tmp" "$SETUP_SHA"
+  mv "$tmp" "$HOME/.local/bin/omarchy-setup-screensaver"
+  chmod 755 "$HOME/.local/bin/omarchy-setup-screensaver"
+
   cat > "$HOME/.local/bin/omarchy-screensaver-amiga" <<'WRAPPER'
 #!/bin/bash
 
@@ -137,7 +274,7 @@ fi
 exec python3 "$controller" "$@"
 WRAPPER
   chmod 755 "$HOME/.local/bin/omarchy-screensaver-amiga"
-  log 'wrapper installed to ~/.local/bin/omarchy-screensaver-amiga'
+  log 'launcher, selector and wrapper installed to ~/.local/bin'
 }
 
 install_plugin() {
@@ -174,6 +311,8 @@ install_plugin() {
     cp -a "$archive/plugin/$file" "$target/$file"
     cp -a "$archive/plugin/$file" "$target/native-v1/$file"
   done
+  pin_plugin_launcher "$target/Service.qml"
+  pin_plugin_launcher "$target/native-v1/Service.qml"
   rm -rf "$archive" "$tmp"
 
   if [[ ! -f $target/manifest.json ]]; then
@@ -201,28 +340,7 @@ MANIFEST
   backup_once "$OMARCHY_DIR/shell.json"
   local plugin_id
   plugin_id=$(python3 -c "import json;print(json.load(open('$target/manifest.json'))['id'])")
-  python3 - "$OMARCHY_DIR/shell.json" "$plugin_id" <<'PY'
-import json, sys
-path, plugin_id = sys.argv[1], sys.argv[2]
-try:
-    data = json.load(open(path))
-except (OSError, ValueError):
-    data = {}
-plugins = data.get('plugins')
-if isinstance(plugins, dict):  # future shape: id -> bool
-    plugins[plugin_id] = True
-    for conflicting in ('omarchy.idle', 'io.github.avillagran.omarchy-amiga'):
-        if plugins.get(conflicting):
-            plugins[conflicting] = False
-elif isinstance(plugins, list):  # current shape: enabled ids
-    if plugin_id not in plugins:
-        plugins.append(plugin_id)
-    plugins[:] = [p for p in plugins
-                  if p not in ('omarchy.idle', 'io.github.avillagran.omarchy-amiga')]
-else:
-    data['plugins'] = [plugin_id]
-json.dump(data, open(path, 'w'), indent=2)
-PY
+  enable_plugin_in_shell_json "$OMARCHY_DIR/shell.json" "$plugin_id"
   log "plugin $plugin_id enabled in shell.json"
 }
 
@@ -251,12 +369,21 @@ install_pack() {
 select_screensaver() {
   rm -rf "$HOME/.cache/quickshell/qmlcache" 2>/dev/null || true
   if have omarchy-setup-screensaver; then
-    # Persists selection only after the full readiness check (runtime, pack,
-    # native idle service IPC) passes.
-    if omarchy-setup-screensaver amiga; then
+    # A freshly enabled clone hot-loads asynchronously. Preflight here before
+    # calling the interactive selector: its not-ready path opens a floating
+    # installer terminal and would make this installer wait on that window.
+    local ready=false attempts=${AMIGA_READY_ATTEMPTS:-20}
+    for ((attempt = 0; attempt < attempts; attempt++)); do
+      if omarchy-screensaver-amiga --check; then
+        ready=true
+        break
+      fi
+      sleep .25
+    done
+    if [[ $ready == true ]] && omarchy-setup-screensaver amiga; then
       log 'screensaver selection persisted: amiga'
     else
-      log 'WARNING: omarchy-setup-screensaver amiga did not pass yet (idle service may need a shell reload). Selection not persisted.'
+      log 'WARNING: Amiga is installed, but the idle service did not become ready yet. Selection was not changed.'
     fi
   else
     backup_once "$OMARCHY_DIR/screensaver"
@@ -271,6 +398,7 @@ do_install() {
   install_runtime
   install_wrapper
   install_plugin
+  install_menu
   install_pack
   select_screensaver
   log 'done. The screensaver launches on idle, or force it with: omarchy-launch-screensaver force'
@@ -279,8 +407,10 @@ do_install() {
 # --------------------------------------------------------------- uninstall ---
 
 do_uninstall() {
-  rm -f "$HOME/.local/bin/omarchy-screensaver-amiga" "$HOME/.local/bin/omarchy-launch-screensaver"
-  log 'wrapper and launcher removed'
+  rm -f "$HOME/.local/bin/omarchy-screensaver-amiga" \
+    "$HOME/.local/bin/omarchy-launch-screensaver" \
+    "$HOME/.local/bin/omarchy-setup-screensaver"
+  log 'wrapper, launcher and selector removed'
 
   if [[ -d $RUNTIME_DIR ]]; then
     tar --zstd -cf "$BACKUP_DIR/runtime-removed-$(date +%Y%m%d-%H%M%S).tar.zst" \
@@ -310,6 +440,13 @@ do_uninstall() {
   if [[ -f $BACKUP_DIR/screensaver.orig ]]; then
     cp -a "$BACKUP_DIR/screensaver.orig" "$OMARCHY_DIR/screensaver"
     log 'screensaver selection restored'
+  fi
+  if [[ -f $BACKUP_DIR/omarchy-menu.jsonc.orig ]]; then
+    cp -a "$BACKUP_DIR/omarchy-menu.jsonc.orig" "$OMARCHY_DIR/extensions/omarchy-menu.jsonc"
+    log 'menu extension restored'
+  elif [[ -f $BACKUP_DIR/omarchy-menu.jsonc.missing ]]; then
+    rm -f "$OMARCHY_DIR/extensions/omarchy-menu.jsonc"
+    log 'installed menu extension removed'
   fi
   rm -rf "$HOME/.cache/quickshell/qmlcache" 2>/dev/null || true
   log 'uninstall complete. Demo pack preserved at ~/Wallpapers/AMIGA.'
