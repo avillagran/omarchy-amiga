@@ -13,6 +13,10 @@ PY
 # shellcheck source=/dev/null
 source "$tmp/functions.sh"
 
+TAG=native-v9.8
+runtime_sha_for() { printf '%s\n' abcdef1234567890; }
+[[ $(plugin_revision) == native-v9-8-abcdef123456 ]]
+
 cat > "$tmp/Service.qml" <<'QML'
 runProcess(screensaverProcess, "screensaver", "[[ $(omarchy-shell lock isLocked 2>/dev/null) == \"true\" ]] || omarchy-launch-screensaver")
 QML
@@ -21,3 +25,34 @@ grep -Fq '\"$HOME/.local/bin/omarchy-launch-screensaver\"' "$tmp/Service.qml"
 ! grep -Fq '|| omarchy-launch-screensaver' "$tmp/Service.qml"
 pin_plugin_launcher "$tmp/Service.qml"
 [[ $(grep -Fc '$HOME/.local/bin/omarchy-launch-screensaver' "$tmp/Service.qml") == 1 ]]
+
+cat >> "$tmp/Service.qml" <<'QML'
+return amigaScreensaver.configure("file://" + directory + "/omarchy-amiga-runtime/guard/Guard.qml")
+QML
+pin_plugin_guard "$tmp/Service.qml"
+grep -Fq 'Qt.resolvedUrl("guard/Guard.qml")' "$tmp/Service.qml"
+! grep -Fq 'omarchy-amiga-runtime/guard/Guard.qml' "$tmp/Service.qml"
+
+cat > "$tmp/manifest.json" <<'JSON'
+{
+  "schemaVersion": 1,
+  "id": "avillagran.idle",
+  "name": "My Idle",
+  "version": "1.0.0",
+  "author": "Omarchy",
+  "kinds": ["service"],
+  "entryPoints": {"service": "native-v1/Service.qml"},
+  "omarchy": {"clonedFrom": "omarchy.idle"}
+}
+JSON
+write_plugin_manifest "$tmp/manifest.json" "fallback.id" "native-v9-8/Service.qml"
+python3 - "$tmp/manifest.json" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1]))
+assert manifest['id'] == 'avillagran.idle'
+assert manifest['author'] == 'Andrés Villagrán <andres@villagranquiroz.cl>'
+assert manifest['entryPoints']['service'] == 'native-v9-8/Service.qml'
+assert manifest['omarchy']['clonedFrom'] == 'omarchy.idle'
+PY

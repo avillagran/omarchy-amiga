@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Omarchy native Amiga screensaver — one-liner installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.3/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.1/install.sh | bash
 #
 # Safe to re-run. `--uninstall` removes what this script installed and restores
 # backed-up Omarchy state; user media (the demo pack) is always preserved.
 
 set -euo pipefail
 
-TAG=native-v0.3
+TAG=native-v0.4.1
 REPO=avillagran/omarchy-amiga
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
-RUNTIME_X86_64_SHA=d92699ff8601c59d28cbc4f927c9cea51fb12e7fb90b93dbcb6cabed77b9c121
-RUNTIME_AARCH64_SHA=f789c019b6934c55a5379d47a2d7364bba1187ccfe714d45537fdc7a3b950a03
+RUNTIME_X86_64_SHA=4dbbf4bf5534ed7d760d22f0e5c8b55bee38a7bfc33d45ef371da25331aa7362
+RUNTIME_AARCH64_SHA=142183daf64c277a3e7e6be4387f38b1067d80ba027b0b51ee1d326e701097f8
 PACK_SHA=6c38d7ed2c289c4eaa352af5e6a8128a950329a223a64dfc2bc9693ce73b6f08
 
 OMARCHY_DIR=${OMARCHY_DIR:-$HOME/.config/omarchy}
@@ -93,6 +93,11 @@ runtime_sha_for() {
   esac
 }
 
+plugin_revision() {
+  local release=${TAG//./-}
+  printf '%s-%s\n' "$release" "$(runtime_sha_for | cut -c1-12)"
+}
+
 backup_once() { # backup_once <file> — keep first copy only
   local file=$1 name
   [[ -f $file ]] || return 0
@@ -156,6 +161,58 @@ if old in text:
     path.write_text(text.replace(old, new))
 elif pinned not in text:
     raise SystemExit('Amiga idle service has no recognized screensaver launcher')
+PY
+}
+
+pin_plugin_guard() { # pin_plugin_guard <Service.qml>
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = 'amigaScreensaver.configure("file://" + directory + "/omarchy-amiga-runtime/guard/Guard.qml")'
+new = 'amigaScreensaver.configure(Qt.resolvedUrl("guard/Guard.qml"))'
+if old in text:
+    path.write_text(text.replace(old, new))
+elif new not in text:
+    raise SystemExit('Amiga idle service has no recognized guard source')
+PY
+}
+
+write_plugin_manifest() { # write_plugin_manifest <manifest> <fallback-id> <service-path>
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+fallback_id = sys.argv[2]
+service_path = sys.argv[3]
+try:
+    data = json.loads(path.read_text())
+except (OSError, ValueError):
+    data = {}
+plugin_id = data.get('id')
+if not isinstance(plugin_id, str) or not plugin_id:
+    plugin_id = fallback_id
+data.update({
+    'schemaVersion': 1,
+    'id': plugin_id,
+    'author': 'Andrés Villagrán <andres@villagranquiroz.cl>',
+    'kinds': ['service'],
+    'keepLoaded': True,
+})
+data.setdefault('name', 'Amiga Native Idle')
+data.setdefault('version', '1.0.0')
+data.setdefault('description', 'Quickshell idle detection with the native FS-UAE Amiga screensaver.')
+data['entryPoints'] = {'service': service_path}
+omarchy = data.get('omarchy')
+if not isinstance(omarchy, dict):
+    omarchy = {}
+omarchy['clonedFrom'] = 'omarchy.idle'
+data['omarchy'] = omarchy
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
 PY
 }
 
@@ -286,7 +343,7 @@ install_plugin() {
   local target=''
   for dir in "$plugins_dir"/*.idle; do
     [[ -d $dir ]] || continue
-    if grep -q 'amigaPresent' "$dir/native-v1/Service.qml" 2>/dev/null; then
+    if grep -q 'amigaPresent' "$dir/Service.qml" 2>/dev/null; then
       target=$dir
       break
     fi
@@ -298,7 +355,13 @@ install_plugin() {
   else
     log "updating existing native plugin $(basename "$target")"
   fi
-  mkdir -p "$target/native-v1"
+  # A fresh component URL is required for each release. The running QML engine
+  # can retain an older Service.qml API when an enabled plugin reuses the same
+  # entrypoint path, even after the source file and disk cache are replaced.
+  local revision
+  revision=$(plugin_revision)
+  local service_dir=$target/$revision
+  mkdir -p "$service_dir"
 
   local archive tmp
   tmp=$(mktemp --suffix=.tar.zst)
@@ -309,30 +372,17 @@ install_plugin() {
   for file in Service.qml AmigaScreensaver.qml IdleModel.js; do
     [[ -f $archive/plugin/$file ]] || fail "plugin archive is missing $file"
     cp -a "$archive/plugin/$file" "$target/$file"
-    cp -a "$archive/plugin/$file" "$target/native-v1/$file"
+    cp -a "$archive/plugin/$file" "$service_dir/$file"
   done
   pin_plugin_launcher "$target/Service.qml"
-  pin_plugin_launcher "$target/native-v1/Service.qml"
+  pin_plugin_launcher "$service_dir/Service.qml"
+  [[ -f $RUNTIME_DIR/guard/Guard.qml ]] || fail 'installed runtime is missing Guard.qml'
+  rm -rf "$service_dir/guard"
+  cp -a "$RUNTIME_DIR/guard" "$service_dir/guard"
+  pin_plugin_guard "$service_dir/Service.qml"
   rm -rf "$archive" "$tmp"
 
-  if [[ ! -f $target/manifest.json ]]; then
-    local id
-    id=$(basename "$target")
-    cat > "$target/manifest.json" <<MANIFEST
-{
-  "schemaVersion": 1,
-  "id": "$id",
-  "name": "Amiga Native Idle",
-  "version": "1.0.0",
-  "author": "avillagran",
-  "description": "Quickshell idle detection with the native FS-UAE Amiga screensaver.",
-  "kinds": ["service"],
-  "keepLoaded": true,
-  "entryPoints": { "service": "native-v1/Service.qml" },
-  "omarchy": { "clonedFrom": "omarchy.idle" }
-}
-MANIFEST
-  fi
+  write_plugin_manifest "$target/manifest.json" "$(basename "$target")" "$revision/Service.qml"
   touch "$target/$PLUGIN_MARKER"
 
   # Enable our plugin and disable conflicting idle services / the legacy
