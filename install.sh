@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # Omarchy native Amiga screensaver — one-liner installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.1/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.2/install.sh | bash
 #
 # Safe to re-run. `--uninstall` removes what this script installed and restores
 # backed-up Omarchy state; user media (the demo pack) is always preserved.
 
 set -euo pipefail
 
-TAG=native-v0.4.1
+# The one-liner can run from a plain terminal or SSH session where Omarchy's
+# graphical-session environment has not been imported yet.
+export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
+
+TAG=native-v0.4.2
 REPO=avillagran/omarchy-amiga
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
@@ -146,6 +150,54 @@ if plugin_id not in restores:
 data['cloneSourceRestores'] = restores
 json.dump(data, open(path, 'w'), indent=2)
 PY
+}
+
+import_graphical_session_env() {
+  [[ -n ${WAYLAND_DISPLAY:-} && -n ${XDG_RUNTIME_DIR:-} && \
+     -n ${HYPRLAND_INSTANCE_SIGNATURE:-} && -n ${DBUS_SESSION_BUS_ADDRESS:-} ]] \
+    && return 0
+  local pid='' candidate key value
+  local -a pids=()
+  mapfile -t pids < <(pgrep -u "$UID" -x quickshell 2>/dev/null || true)
+  for candidate in "${pids[@]}"; do
+    [[ -r /proc/$candidate/environ && -r /proc/$candidate/cmdline ]] || continue
+    if [[ $(tr '\0' ' ' < "/proc/$candidate/cmdline") == *"$OMARCHY_PATH/shell"* ]]; then
+      pid=$candidate
+      break
+    fi
+  done
+  [[ -n $pid ]] || return 1
+
+  for key in WAYLAND_DISPLAY XDG_RUNTIME_DIR HYPRLAND_INSTANCE_SIGNATURE DBUS_SESSION_BUS_ADDRESS; do
+    [[ -n ${!key:-} ]] && continue
+    value=$(python3 - "$pid" "$key" <<'PY'
+from pathlib import Path
+import sys
+
+pid, key = sys.argv[1:]
+for item in Path(f'/proc/{pid}/environ').read_bytes().split(b'\0'):
+    name, separator, value = item.partition(b'=')
+    if separator and name.decode(errors='ignore') == key:
+        print(value.decode(errors='surrogateescape'))
+        break
+PY
+)
+    [[ -n $value ]] || continue
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done
+}
+
+refresh_plugin_service() { # refresh_plugin_service <plugin-id>
+  local plugin_id=$1
+  have omarchy || return 1
+  import_graphical_session_env || return 1
+  omarchy plugin disable "$plugin_id" >/dev/null
+  if ! omarchy plugin enable "$plugin_id" >/dev/null; then
+    enable_plugin_in_shell_json "$OMARCHY_DIR/shell.json" "$plugin_id"
+    return 1
+  fi
+  log "plugin $plugin_id hot-reloaded"
 }
 
 pin_plugin_launcher() { # pin_plugin_launcher <Service.qml>
@@ -320,6 +372,7 @@ install_wrapper() {
 # omarchy:args=[--check]
 # omarchy:hidden=true
 
+export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 controller="$OMARCHY_PATH/shell/plugins/services/idle/state.py"
 if [[ ! -f $controller ]]; then
   if [[ -d /usr/lib/omarchy-amiga-runtime ]]; then
@@ -340,11 +393,12 @@ install_plugin() {
 
   # Reuse an existing native Amiga idle clone (e.g. kuyen.idle) when present;
   # otherwise create a fresh plugin directory.
-  local target=''
+  local target='' replacing_existing=false
   for dir in "$plugins_dir"/*.idle; do
     [[ -d $dir ]] || continue
     if grep -q 'amigaPresent' "$dir/Service.qml" 2>/dev/null; then
       target=$dir
+      replacing_existing=true
       break
     fi
   done
@@ -392,6 +446,10 @@ install_plugin() {
   plugin_id=$(python3 -c "import json;print(json.load(open('$target/manifest.json'))['id'])")
   enable_plugin_in_shell_json "$OMARCHY_DIR/shell.json" "$plugin_id"
   log "plugin $plugin_id enabled in shell.json"
+  if [[ $replacing_existing == true ]]; then
+    refresh_plugin_service "$plugin_id" \
+      || fail "could not hot-reload updated plugin $plugin_id"
+  fi
 }
 
 install_pack() {
@@ -424,7 +482,7 @@ select_screensaver() {
     # installer terminal and would make this installer wait on that window.
     local ready=false attempts=${AMIGA_READY_ATTEMPTS:-20}
     for ((attempt = 0; attempt < attempts; attempt++)); do
-      if omarchy-screensaver-amiga --check; then
+      if omarchy-screensaver-amiga --check >/dev/null 2>&1; then
         ready=true
         break
       fi

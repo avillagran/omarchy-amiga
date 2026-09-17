@@ -11,7 +11,9 @@ text = Path(sys.argv[1]).read_text()
 Path(sys.argv[2]).write_text(text.split('case "${1:-}" in', 1)[0])
 PY
 # shellcheck source=/dev/null
+unset OMARCHY_PATH
 source "$tmp/functions.sh"
+[[ $OMARCHY_PATH == /usr/share/omarchy ]]
 
 mkdir -p "$tmp/bin" "$tmp/home/.cache/quickshell/qmlcache"
 cat > "$tmp/bin/omarchy-screensaver-amiga" <<'SH'
