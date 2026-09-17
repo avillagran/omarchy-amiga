@@ -56,3 +56,20 @@ assert manifest['author'] == 'Andrés Villagrán <andres@villagranquiroz.cl>'
 assert manifest['entryPoints']['service'] == 'native-v9-8/Service.qml'
 assert manifest['omarchy']['clonedFrom'] == 'omarchy.idle'
 PY
+
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/omarchy" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$AMIGA_TEST_COMMANDS"
+SH
+chmod +x "$tmp/bin/omarchy"
+export PATH="$tmp/bin:$PATH"
+export AMIGA_TEST_COMMANDS="$tmp/commands"
+export WAYLAND_DISPLAY=wayland-test
+export XDG_RUNTIME_DIR="$tmp/runtime"
+export HYPRLAND_INSTANCE_SIGNATURE=test-instance
+export DBUS_SESSION_BUS_ADDRESS=unix:path=test
+refresh_plugin_service avillagran.idle
+mapfile -t commands < "$AMIGA_TEST_COMMANDS"
+[[ ${commands[0]} == 'plugin disable avillagran.idle' ]]
+[[ ${commands[1]} == 'plugin enable avillagran.idle' ]]
