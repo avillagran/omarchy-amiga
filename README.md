@@ -1,135 +1,84 @@
-# Omarchy Amiga Demo Backgrounds
+# Omarchy Amiga Screensaver
 
-Standalone Omarchy service for loading legal Amiga disk images through FS-UAE.
+Native Amiga demo screensaver for Omarchy, powered exclusively by FS-UAE.
 
-FS-UAE is the only emulator backend. The plugin does not bundle or invoke
-another emulator and requires the system `fs-uae` package.
-
-Supported input:
-
-- `.dms`
-- `.adf`
-
-The disk image is not modified. A Kickstart ROM, when required by a demo, must
-be supplied legally by the user in the normal FS-UAE Kickstart location:
-
-```text
-~/Documents/FS-UAE/Kickstarts/
-```
-
-Kickstart ROMs are never downloaded by this plugin. A legal Kickstart is needed
-for reliable compatibility with original productions.
+The installer supports `x86_64` and `aarch64`, integrates with Omarchy's idle service and screensaver menu, and installs the current prepared demo pack automatically.
 
 ## Install
 
-Install the plugin through Omarchy:
+Run:
 
 ```bash
-omarchy plugin add https://github.com/avillagran/omarchy-amiga --enable --yes
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.2/install.sh | bash
 ```
 
-After a fresh install, prepare the host and run the diagnostic:
+The installer is safe to run again when upgrading or repairing an installation.
 
-```bash
-~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-install --install-deps
-```
+## What is installed
 
-The command installs FS-UAE and its runtime libraries through `pacman`, creates
-the user media/Kickstart directories, and checks the system binary with `ldd`
-and `--version`. It never downloads ROMs or disk images. Use `--check` to skip
-package installation.
+- Architecture-specific native runtime in `~/.local/lib/omarchy-amiga-runtime`
+- FS-UAE launcher, selector, and runtime checker in `~/.local/bin`
+- Native Omarchy idle-service integration and screensaver menu entries
+- The current prepared pack of 31 demos in `~/Wallpapers/AMIGA`
 
-To inspect a broken installation without changing anything:
+The pack includes checksum-bound configurations, media, previews, and saved states required for immediate playback. The runtime uses FS-UAE as its only emulator backend.
 
-```bash
-~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-doctor
-```
+If `~/Wallpapers/AMIGA/SHA256SUMS` already exists, the installer preserves the pack and verifies it in place instead of downloading it again. It never modifies the separate legacy directory `~/Wallpapers/Amiga`.
 
-Generate one FS-UAE configuration per demo folder. The files stay beside the
-user-owned disk images and are not part of the repository:
+## Use
 
-```bash
-~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-generate-fsuae
-```
-
-The generated configuration uses FS-UAE's internal AROS ROM, conservative
-A500/ECS defaults, and lists every disk in a multi-disk folder. Names containing
-`AGA`, `A1200`, or `CD32` select A1200/AGA. The launcher loads `omarchy.fs-uae`
-automatically when it is present.
-
-## Demo pack v0.1
-
-The demo media is distributed separately from Git. Download
-`omarchy-amiga-demos-v0.1.zip`, then install it with:
-
-```bash
-mkdir -p ~/Wallpapers/Amiga
-unzip -o omarchy-amiga-demos-v0.1.zip -d ~/Wallpapers/Amiga
-~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-generate-fsuae \
-  ~/Wallpapers/Amiga --force
-```
-
-Install FS-UAE and the plugin first if needed:
-
-```bash
-omarchy plugin add https://github.com/avillagran/omarchy-amiga --enable --yes
-~/.config/omarchy/plugins/io.github.avillagran.omarchy-amiga/bin/omarchy-amiga-install --install-deps
-```
-
-The pack contains user-owned demo media only. It contains no Kickstart ROMs.
-FS-UAE uses its internal AROS ROM by default; legal user-supplied Kickstarts,
-when needed for a production, belong in `~/Documents/FS-UAE/Kickstarts/`.
-
-Put demos in:
+Select the native screensaver from:
 
 ```text
-~/Wallpapers/Amiga/
+Style > Screensaver > Amiga
 ```
 
-List available demos:
-
-```bash
-bin/list.sh
-```
-
-## Run directly
-
-This launches FS-UAE fullscreen when installed and preserves the original
-demo timing and rendering:
-
-```bash
-bin/omarchy-amiga start ~/Wallpapers/Amiga/demo.dms direct
-```
-
-Stop it with:
-
-```bash
-bin/omarchy-amiga stop
-```
-
-The same operation through the service IPC is:
-
-```bash
-omarchy-shell -q io.github.avillagran.omarchy-amiga start /absolute/path/demo.dms direct
-omarchy-shell -q io.github.avillagran.omarchy-amiga stop
-```
-
-## Background mode
-
-`background` launches FS-UAE inside a real `gtk4-layer-shell` background
-surface. The demo remains an unmodified original disk image.
-
-The active surface can be verified with:
-
-```bash
-hyprctl layers
-```
-
-Look for `namespace: omarchy-amiga` under `Layer level 0 (background)`. The
-launcher records the emulator result in the legacy state/log path:
+Start a preview from:
 
 ```text
-~/.local/state/omarchy/amiga/fs-uae.log
+Style > Screensaver > Preview
 ```
 
-Kickstart ROMs and demo disk images are not bundled by this plugin.
+You can also run the installed preview launcher directly:
+
+```bash
+~/.local/bin/omarchy-launch-screensaver force
+```
+
+The screensaver starts muted. During playback:
+
+- `M` toggles audio without closing the screensaver.
+- Left and Right navigate through the demo history.
+- Other intentional input dismisses the screensaver.
+
+## Verify
+
+Check the installed runtime, pack, and live Omarchy integration:
+
+```bash
+~/.local/bin/omarchy-screensaver-amiga --check
+```
+
+A successful check exits silently with status 0.
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.2/install.sh | bash -s -- --uninstall
+```
+
+Uninstalling removes the managed runtime, launchers, menu integration, and plugin files while preserving `~/Wallpapers/AMIGA` and other user media.
+
+## Release
+
+The current tested release is [`native-v0.4.2`](https://github.com/avillagran/omarchy-amiga/releases/tag/native-v0.4.2).
+
+It has been installed and visually verified on x86_64 Omarchy hardware and tested in an x86_64 Omarchy QEMU guest. Both supported runtime archives are checksum-verified before installation.
+
+## Media and ROMs
+
+This project does not distribute proprietary Kickstart ROMs. Demo media is packaged separately from the Git repository and installed from the pinned release asset used by the installer.
+
+## Author
+
+Andrés Villagrán <andres@villagranquiroz.cl>
