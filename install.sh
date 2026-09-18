@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omarchy native Amiga screensaver — one-liner installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.4/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.5/install.sh | bash
 #
 # Safe to re-run. `--uninstall` removes what this script installed and restores
 # backed-up Omarchy state; user media (the demo pack) is always preserved.
@@ -12,7 +12,7 @@ set -euo pipefail
 # graphical-session environment has not been imported yet.
 export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 
-TAG=native-v0.4.4
+TAG=native-v0.4.5
 REPO=avillagran/omarchy-amiga
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
