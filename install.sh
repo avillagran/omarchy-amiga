@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omarchy native Amiga screensaver — one-liner installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.2/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.3/install.sh | bash
 #
 # Safe to re-run. `--uninstall` removes what this script installed and restores
 # backed-up Omarchy state; user media (the demo pack) is always preserved.
@@ -12,13 +12,15 @@ set -euo pipefail
 # graphical-session environment has not been imported yet.
 export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 
-TAG=native-v0.4.2
+TAG=native-v0.4.3
 REPO=avillagran/omarchy-amiga
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
 RUNTIME_X86_64_SHA=4dbbf4bf5534ed7d760d22f0e5c8b55bee38a7bfc33d45ef371da25331aa7362
 RUNTIME_AARCH64_SHA=142183daf64c277a3e7e6be4387f38b1067d80ba027b0b51ee1d326e701097f8
-PACK_SHA=6c38d7ed2c289c4eaa352af5e6a8128a950329a223a64dfc2bc9693ce73b6f08
+PACK_SHA=4c116e066e7e261741db2b56e45570fd583f965dc9b34bd9088062831e7ed278
+PACK_INVENTORY_SHA=89f2d93ac19a9539aa7948150a7526903768e3f99263c8b6668d8c5d23c80d18
+PACK_PREVIOUS_INVENTORY_SHA=54a8b6c7727adb37232ffe4ec676cb5722313a3e05d048c297cbeb10f0582471
 
 OMARCHY_DIR=${OMARCHY_DIR:-$HOME/.config/omarchy}
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy
@@ -391,7 +393,7 @@ install_plugin() {
   local plugins_dir=$OMARCHY_DIR/plugins
   mkdir -p "$plugins_dir" "$BACKUP_DIR"
 
-  # Reuse an existing native Amiga idle clone (e.g. kuyen.idle) when present;
+  # Reuse an existing native Amiga idle clone when present;
   # otherwise create a fresh plugin directory.
   local target='' replacing_existing=false
   for dir in "$plugins_dir"/*.idle; do
@@ -453,23 +455,47 @@ install_plugin() {
 }
 
 install_pack() {
+  local installed_inventory= upgrade=false
   if [[ -f $PACK_DIR/SHA256SUMS ]]; then
     log 'pack already present; verifying checksums in place'
     (cd "$PACK_DIR" && sha256sum -c --quiet SHA256SUMS) \
       || fail 'existing pack failed checksum verification (move it away and re-run)'
-    return 0
+    installed_inventory=$(sha256sum "$PACK_DIR/SHA256SUMS" | cut -d' ' -f1)
+    if [[ $installed_inventory == "$PACK_INVENTORY_SHA" ]]; then
+      log 'current calibrated demo pack already installed'
+      return 0
+    elif [[ $installed_inventory == "$PACK_PREVIOUS_INVENTORY_SHA" ]]; then
+      log 'upgrading the verified previous demo pack'
+      upgrade=true
+    else
+      log 'preserving an unrecognized user-managed demo pack'
+      return 0
+    fi
   fi
   log 'downloading demo pack (31 demos, ~29 MB)'
-  local tmp staging
+  local tmp staging previous
   tmp=$(mktemp --suffix=.tar.zst)
-  fetch "https://github.com/avillagran/omarchy-animated-background/releases/download/amiga-pack-v0.2/amiga-pack-native.tar.zst" "$tmp"
+  fetch "https://github.com/avillagran/omarchy-animated-background/releases/download/amiga-pack-v0.3/amiga-pack-native-v0.3.tar.zst" "$tmp"
   verify_sha "$tmp" "$PACK_SHA"
   staging=$(mktemp -d)
   tar --zstd -xf "$tmp" -C "$staging"
   (cd "$staging/AMIGA" && sha256sum -c --quiet SHA256SUMS) \
     || fail 'downloaded pack failed checksum verification'
-  mkdir -p "$PACK_DIR"
-  cp -a "$staging/AMIGA/." "$PACK_DIR/"
+  [[ $(sha256sum "$staging/AMIGA/SHA256SUMS" | cut -d' ' -f1) == "$PACK_INVENTORY_SHA" ]] \
+    || fail 'downloaded pack inventory does not match this installer'
+  mkdir -p "$(dirname "$PACK_DIR")"
+  if [[ $upgrade == true ]]; then
+    previous="$PACK_DIR.previous.$$"
+    mv "$PACK_DIR" "$previous"
+    if mv "$staging/AMIGA" "$PACK_DIR"; then
+      rm -rf "$previous"
+    else
+      mv "$previous" "$PACK_DIR"
+      fail 'failed to activate the calibrated demo pack; previous pack restored'
+    fi
+  else
+    mv "$staging/AMIGA" "$PACK_DIR"
+  fi
   rm -rf "$staging" "$tmp"
   log "pack installed to $PACK_DIR ($(ls -d "$PACK_DIR"/*/ | wc -l) demos)"
 }
