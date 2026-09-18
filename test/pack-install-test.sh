@@ -29,7 +29,8 @@ mkdir -p "$(dirname "$PACK_DIR")"
 cp -a "$old" "$PACK_DIR"
 PACK_SHA=$(sha256sum "$archive" | cut -d' ' -f1)
 PACK_INVENTORY_SHA=$(sha256sum "$new/SHA256SUMS" | cut -d' ' -f1)
-PACK_PREVIOUS_INVENTORY_SHA=$(sha256sum "$old/SHA256SUMS" | cut -d' ' -f1)
+PACK_PREVIOUS_V02_INVENTORY_SHA=$(sha256sum "$old/SHA256SUMS" | cut -d' ' -f1)
+PACK_PREVIOUS_V03_INVENTORY_SHA=unused
 fetch() {
   cp "$archive" "$2"
 }
