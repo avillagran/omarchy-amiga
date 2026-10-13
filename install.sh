@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omarchy native Amiga screensaver — one-liner installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.5.0/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.5.1/install.sh | bash
 #
 # Safe to re-run. `--uninstall` removes what this script installed and restores
 # backed-up Omarchy state; user media (the demo pack) is always preserved.
@@ -12,7 +12,7 @@ set -euo pipefail
 # graphical-session environment has not been imported yet.
 export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 
-TAG=native-v0.5.0
+TAG=native-v0.5.1
 ASSET_TAG=native-v0.4.5
 REPO=avillagran/omarchy-amiga
 BASE_URL="https://github.com/$REPO/releases/download/$ASSET_TAG"
@@ -289,13 +289,16 @@ try:
 except ValueError as error:
     raise SystemExit('invalid Omarchy menu extension: ' + str(error))
 data.update({
+    'style.screensaver': {
+        'icon': '󱄄', 'label': 'Screensavers',
+    },
     'style.screensaver.omarchy': {
         'icon': '󱄄', 'label': 'Default',
         'checked': 'omarchy-setup-screensaver --is-default',
         'action': 'omarchy-setup-screensaver default',
     },
     'style.screensaver.amiga': {
-        'icon': '󰊗', 'label': 'Amiga',
+        'icon': '󰊗', 'label': 'Set Amiga Demos',
         'checked': 'omarchy-setup-screensaver --is-amiga',
         'action': 'omarchy-setup-screensaver amiga',
     },
@@ -307,6 +310,7 @@ data.update({
         'action': '"$HOME/.local/bin/omarchy-launch-screensaver" force',
     },
 })
+data.pop('style.screensaver.review', None)
 with open(path, 'w') as stream:
     json.dump(data, stream, ensure_ascii=False, indent=2)
     stream.write('\n')
