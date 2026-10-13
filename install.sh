@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omarchy native Amiga screensaver — one-liner installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.4.5/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.5.0/install.sh | bash
 #
 # Safe to re-run. `--uninstall` removes what this script installed and restores
 # backed-up Omarchy state; user media (the demo pack) is always preserved.
@@ -12,16 +12,19 @@ set -euo pipefail
 # graphical-session environment has not been imported yet.
 export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 
-TAG=native-v0.4.5
+TAG=native-v0.5.0
+ASSET_TAG=native-v0.4.5
 REPO=avillagran/omarchy-amiga
-BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+BASE_URL="https://github.com/$REPO/releases/download/$ASSET_TAG"
+PACK_URL=${PACK_URL:-"https://raw.githubusercontent.com/$REPO/$TAG/selection/amiga-screensaver-selection.zip"}
 
 RUNTIME_X86_64_SHA=4dbbf4bf5534ed7d760d22f0e5c8b55bee38a7bfc33d45ef371da25331aa7362
 RUNTIME_AARCH64_SHA=142183daf64c277a3e7e6be4387f38b1067d80ba027b0b51ee1d326e701097f8
-PACK_SHA=e433b9337911ce82b39c08197ef5a6e1af581737db8f13b6056a612e7ecefcff
-PACK_INVENTORY_SHA=8b49d19929b004628c8a3a41a56d3e96405487d23fbb22281e63c9c8cc0c630c
+PACK_SHA=c5bc1e2c83b043a3be09659787583759d9f614c9e7411045b87200e64d5572be
+PACK_INVENTORY_SHA=6df7508285595518a3aa38584a87d1bc80303de86ab40073373d41e7f7b4e200
 PACK_PREVIOUS_V02_INVENTORY_SHA=54a8b6c7727adb37232ffe4ec676cb5722313a3e05d048c297cbeb10f0582471
 PACK_PREVIOUS_V03_INVENTORY_SHA=89f2d93ac19a9539aa7948150a7526903768e3f99263c8b6668d8c5d23c80d18
+PACK_PREVIOUS_V04_INVENTORY_SHA=8b49d19929b004628c8a3a41a56d3e96405487d23fbb22281e63c9c8cc0c630c
 
 OMARCHY_DIR=${OMARCHY_DIR:-$HOME/.config/omarchy}
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy
@@ -58,7 +61,7 @@ verify_sha() { # verify_sha <file> <expected>
 
 require_tools() {
   local missing=()
-  for tool in python3 tar sha256sum; do
+  for tool in python3 tar unzip sha256sum; do
     have "$tool" || missing+=("$tool")
   done
   have zstd || tar --zstd --version >/dev/null 2>&1 || missing+=('zstd')
@@ -466,7 +469,8 @@ install_pack() {
       log 'current calibrated demo pack already installed'
       return 0
     elif [[ $installed_inventory == "$PACK_PREVIOUS_V02_INVENTORY_SHA" \
-        || $installed_inventory == "$PACK_PREVIOUS_V03_INVENTORY_SHA" ]]; then
+        || $installed_inventory == "$PACK_PREVIOUS_V03_INVENTORY_SHA" \
+        || $installed_inventory == "$PACK_PREVIOUS_V04_INVENTORY_SHA" ]]; then
       log 'upgrading the verified previous demo pack'
       upgrade=true
     else
@@ -474,13 +478,13 @@ install_pack() {
       return 0
     fi
   fi
-  log 'downloading curated demo pack (24 demos, ~22 MB)'
+  log 'downloading curated selection (13 demos with clean saved-state starts, ~14 MB)'
   local tmp staging previous
-  tmp=$(mktemp --suffix=.tar.zst)
-  fetch "https://github.com/avillagran/omarchy-animated-background/releases/download/amiga-pack-v0.4/amiga-pack-native-v0.4.tar.zst" "$tmp"
+  tmp=$(mktemp --suffix=.zip)
+  fetch "$PACK_URL" "$tmp"
   verify_sha "$tmp" "$PACK_SHA"
   staging=$(mktemp -d)
-  tar --zstd -xf "$tmp" -C "$staging"
+  unzip -q "$tmp" -d "$staging"
   (cd "$staging/AMIGA" && sha256sum -c --quiet SHA256SUMS) \
     || fail 'downloaded pack failed checksum verification'
   [[ $(sha256sum "$staging/AMIGA/SHA256SUMS" | cut -d' ' -f1) == "$PACK_INVENTORY_SHA" ]] \
