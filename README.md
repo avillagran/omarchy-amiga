@@ -9,7 +9,7 @@ The installer supports `x86_64` and `aarch64`, integrates with Omarchy's idle se
 Run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.5.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.5.2/install.sh | bash
 ```
 
 The installer is safe to run again when upgrading or repairing an installation.
@@ -31,13 +31,13 @@ If `~/Wallpapers/AMIGA/SHA256SUMS` already exists, the installer preserves the p
 Select the native screensaver from:
 
 ```text
-Style > Screensavers > Set Amiga Demos
+Style > Screensaver > Set Amiga Demos
 ```
 
 Start a preview from:
 
 ```text
-Style > Screensavers > Preview
+Style > Screensaver > Preview
 ```
 
 You can also run the installed preview launcher directly:
@@ -65,14 +65,14 @@ A successful check exits silently with status 0.
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.5.1/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-amiga/native-v0.5.2/install.sh | bash -s -- --uninstall
 ```
 
 Uninstalling removes the managed runtime, launchers, menu integration, and plugin files while preserving `~/Wallpapers/AMIGA` and other user media.
 
 ## Release
 
-The current tested release is [`native-v0.5.1`](https://github.com/avillagran/omarchy-amiga/releases/tag/native-v0.5.1).
+The current tested release is [`native-v0.5.2`](https://github.com/avillagran/omarchy-amiga/releases/tag/native-v0.5.2).
 
 The native runtime and plugin assets remain pinned to the verified `native-v0.4.5` release. This release moves the calibrated selection into this repository as a checksum-bound ZIP and makes the installer download it automatically. The selection contains the 13 productions kept during review, each with a saved state for a clean playback start. Verified v0.2, v0.3, and v0.4 packs upgrade safely; unrecognized user-managed packs are preserved.
 
