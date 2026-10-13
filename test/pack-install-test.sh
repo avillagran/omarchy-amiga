@@ -21,8 +21,8 @@ printf 'old\n' > "$old/old-demo/data"
 printf 'new\n' > "$new/new-demo/data"
 (cd "$old" && sha256sum old-demo/data > SHA256SUMS)
 (cd "$new" && sha256sum new-demo/data > SHA256SUMS)
-archive="$tmp/amiga-pack-native.tar.zst"
-tar --zstd -cf "$archive" -C "$tmp/new" AMIGA
+archive="$tmp/amiga-screensaver-selection.zip"
+(cd "$tmp/new" && zip -qr "$archive" AMIGA)
 
 PACK_DIR="$tmp/installed/AMIGA"
 mkdir -p "$(dirname "$PACK_DIR")"
